@@ -1,0 +1,70 @@
+# Multi-Network Test Scenario
+# Tests creation of multiple networks with a VM attached to one network.
+# Validates that multiple networks can be created and VMs can reference them.
+
+providers:
+  - name: stub
+    engine: ./build/bin/testenv-vm-provider-stub
+    default: true
+    spec: {}
+
+keys:
+  - name: mgmt-key
+    provider: stub
+    spec:
+      type: ed25519
+      comment: "mgmt-key@e2e-test"
+
+networks:
+  - name: mgmt-network
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.100.0/24"
+      gateway: "192.168.100.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.100.10"
+        rangeEnd: "192.168.100.100"
+
+  - name: data-network
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.200.0/24"
+      gateway: "192.168.200.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.200.10"
+        rangeEnd: "192.168.200.100"
+
+  - name: storage-network
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "10.0.0.0/24"
+      gateway: "10.0.0.1"
+      dhcp:
+        enabled: false
+
+vms:
+  - name: multi-net-vm
+    provider: stub
+    spec:
+      memory: 2048
+      vcpus: 2
+      network: mgmt-network
+      disk:
+        baseImage: ubuntu-22.04
+        size: 20G
+      boot:
+        order:
+          - hd
+        firmware: bios
+      cloudInit:
+        hostname: multi-net-vm
+        users:
+          - name: admin
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.mgmt-key.PublicKey }}"

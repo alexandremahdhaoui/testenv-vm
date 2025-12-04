@@ -1,0 +1,28 @@
+name: testenv-vm
+artifactStorePath: .forge/artifact-store.yaml
+
+build:
+  - name: testenv-vm
+    src: ./cmd/testenv-vm
+    dest: ./build/bin
+    engine: go://go-build
+
+  - name: testenv-vm-provider-stub
+    src: ./cmd/providers/testenv-vm-provider-stub
+    dest: ./build/bin
+    engine: go://go-build
+
+test:
+  - name: verify-tags
+    runner: "go://go-lint-tags"
+
+  - name: lint
+    runner: go://go-lint
+
+  - name: unit
+    runner: go://go-test
+
+  - name: e2e
+    runner: go://go-test
+    # The go-test runner uses the stage name (e2e) as the build tag automatically
+    # Tests must have //go:build e2e directive

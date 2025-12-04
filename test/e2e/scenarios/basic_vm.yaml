@@ -1,0 +1,50 @@
+# Basic VM Test Scenario
+# Tests creation of a single VM with an SSH key and network.
+# This is the simplest end-to-end scenario validating the core flow.
+
+providers:
+  - name: stub
+    engine: ./build/bin/testenv-vm-provider-stub
+    default: true
+    spec: {}
+
+keys:
+  - name: test-key
+    provider: stub
+    spec:
+      type: ed25519
+      comment: "test-key@e2e-test"
+
+networks:
+  - name: test-network
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.100.0/24"
+      gateway: "192.168.100.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.100.10"
+        rangeEnd: "192.168.100.100"
+
+vms:
+  - name: test-vm
+    provider: stub
+    spec:
+      memory: 1024
+      vcpus: 1
+      network: test-network
+      disk:
+        baseImage: ubuntu-22.04
+        size: 10G
+      boot:
+        order:
+          - hd
+        firmware: bios
+      cloudInit:
+        hostname: test-vm
+        users:
+          - name: testuser
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.test-key.PublicKey }}"

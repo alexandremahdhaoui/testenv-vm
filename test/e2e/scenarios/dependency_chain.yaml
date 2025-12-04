@@ -1,0 +1,112 @@
+# Dependency Chain Test Scenario
+# Tests complex dependency chains for DAG execution order validation.
+# This scenario creates multiple resources with interdependencies to verify
+# that the orchestrator correctly handles the execution order.
+#
+# Dependency graph:
+#   key-1 ----+
+#             |
+#   key-2 ----+---> vm-1 ---> (uses network-1, key-1, key-2)
+#             |
+#   network-1-+
+#
+#   key-3 ----+
+#             |
+#   network-2-+---> vm-2 ---> (uses network-2, key-3)
+#
+# Expected execution order:
+#   Phase 1: key-1, key-2, key-3, network-1, network-2 (all in parallel - no dependencies)
+#   Phase 2: vm-1, vm-2 (both depend on resources from phase 1)
+
+providers:
+  - name: stub
+    engine: ./build/bin/testenv-vm-provider-stub
+    default: true
+    spec: {}
+
+keys:
+  - name: key-1
+    provider: stub
+    spec:
+      type: ed25519
+      comment: "key-1@dag-test"
+
+  - name: key-2
+    provider: stub
+    spec:
+      type: rsa
+      bits: 4096
+      comment: "key-2@dag-test"
+
+  - name: key-3
+    provider: stub
+    spec:
+      type: ecdsa
+      comment: "key-3@dag-test"
+
+networks:
+  - name: network-1
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.1.0/24"
+      gateway: "192.168.1.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.1.10"
+        rangeEnd: "192.168.1.100"
+
+  - name: network-2
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.2.0/24"
+      gateway: "192.168.2.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.2.10"
+        rangeEnd: "192.168.2.100"
+
+vms:
+  - name: vm-1
+    provider: stub
+    spec:
+      memory: 1024
+      vcpus: 1
+      network: network-1
+      disk:
+        baseImage: ubuntu-22.04
+        size: 10G
+      boot:
+        order:
+          - hd
+        firmware: bios
+      cloudInit:
+        hostname: vm-1
+        users:
+          - name: user1
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.key-1.PublicKey }}"
+              - "{{ .Keys.key-2.PublicKey }}"
+
+  - name: vm-2
+    provider: stub
+    spec:
+      memory: 2048
+      vcpus: 2
+      network: network-2
+      disk:
+        baseImage: debian-12
+        size: 20G
+      boot:
+        order:
+          - hd
+        firmware: bios
+      cloudInit:
+        hostname: vm-2
+        users:
+          - name: user2
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.key-3.PublicKey }}"
