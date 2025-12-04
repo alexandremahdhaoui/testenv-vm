@@ -1,5 +1,7 @@
 name: testenv-vm
 artifactStorePath: .forge/artifact-store.yaml
+# -- envFile is the path to a global environment file to source before any operations
+envFile: .envrc
 
 build:
   - name: testenv-vm
@@ -12,9 +14,17 @@ build:
     dest: ./build/bin
     engine: go://go-build
 
+  - name: testenv-vm-provider-libvirt
+    src: ./cmd/providers/testenv-vm-provider-libvirt
+    dest: ./build/bin
+    engine: go://go-build
+
 test:
-  - name: verify-tags
+  - name: lint-tags
     runner: "go://go-lint-tags"
+
+  - name: lint-licenses
+    runner: "go://go-lint-licenses"
 
   - name: lint
     runner: go://go-lint
@@ -22,7 +32,25 @@ test:
   - name: unit
     runner: go://go-test
 
+  - name: integration
+    runner: go://go-test
+    # Integration tests for libvirt provider
+    # Requires: libvirt daemon, qemu-img, genisoimage/mkisofs/xorriso
+    # Tests must have //go:build integration directive
+
   - name: e2e
     runner: go://go-test
     # The go-test runner uses the stage name (e2e) as the build tag automatically
     # Tests must have //go:build e2e directive
+
+  - name: e2e_libvirt
+    runner: go://go-test
+    # E2E tests using the libvirt provider with real VMs
+    # Requires: libvirt daemon, qemu-img, genisoimage/mkisofs/xorriso
+    # Tests must have //go:build e2e_libvirt directive
+
+  - name: e2e_libvirt_delete
+    runner: go://go-test
+    # Verifies that e2e_libvirt resources were properly cleaned up
+    # Runs after e2e_libvirt to ensure cleanup was successful
+    # Tests must have //go:build e2e_libvirt_delete directive

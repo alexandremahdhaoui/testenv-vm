@@ -182,7 +182,6 @@ func (c *Client) initialize() error {
 		return fmt.Errorf("initialized notification failed: %w", err)
 	}
 
-	// Fix Issue 2: Set initialized inside mutex to prevent race condition
 	c.mu.Lock()
 	c.initialized = true
 	c.mu.Unlock()
@@ -190,7 +189,6 @@ func (c *Client) initialize() error {
 }
 
 // call sends a JSON-RPC request and waits for a response.
-// Fix Issue 1: Implements actual timeout handling using goroutine and channel.
 func (c *Client) call(method string, params any, result any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -221,61 +219,43 @@ func (c *Client) call(method string, params any, result any) error {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Fix Issue 1: Read response with timeout using goroutine
-	type scanResult struct {
-		data []byte
-		err  error
+	// Read response synchronously while holding the mutex.
+	// This avoids the race condition where a timeout could cause the mutex
+	// to be released while a goroutine is still reading from the scanner.
+	if !c.scanner.Scan() {
+		if err := c.scanner.Err(); err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
+		return fmt.Errorf("unexpected end of response stream")
 	}
-	resultCh := make(chan scanResult, 1)
 
-	go func() {
-		if !c.scanner.Scan() {
-			if err := c.scanner.Err(); err != nil {
-				resultCh <- scanResult{err: fmt.Errorf("failed to read response: %w", err)}
-			} else {
-				resultCh <- scanResult{err: fmt.Errorf("unexpected end of response stream")}
-			}
-			return
-		}
-		// Make a copy of the bytes since scanner reuses the buffer
-		data := make([]byte, len(c.scanner.Bytes()))
-		copy(data, c.scanner.Bytes())
-		resultCh <- scanResult{data: data}
-	}()
+	// Make a copy of the bytes since scanner reuses the buffer
+	data := make([]byte, len(c.scanner.Bytes()))
+	copy(data, c.scanner.Bytes())
 
-	// Wait for response with timeout
-	select {
-	case <-time.After(c.timeout):
-		return fmt.Errorf("timeout waiting for response after %v", c.timeout)
-	case res := <-resultCh:
-		if res.err != nil {
-			return res.err
-		}
-
-		var resp jsonrpcResponse
-		if err := json.Unmarshal(res.data, &resp); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
-		}
-
-		// Fix Issue 3: Verify response ID matches request ID
-		if resp.ID != id {
-			return fmt.Errorf("response ID mismatch: expected %d, got %d", id, resp.ID)
-		}
-
-		// Check for JSON-RPC error
-		if resp.Error != nil {
-			return fmt.Errorf("JSON-RPC error %d: %s", resp.Error.Code, resp.Error.Message)
-		}
-
-		// Unmarshal result if provided
-		if result != nil && resp.Result != nil {
-			if err := json.Unmarshal(resp.Result, result); err != nil {
-				return fmt.Errorf("failed to unmarshal result: %w", err)
-			}
-		}
-
-		return nil
+	var resp jsonrpcResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
 	}
+
+	// Verify response ID matches request ID
+	if resp.ID != id {
+		return fmt.Errorf("response ID mismatch: expected %d, got %d", id, resp.ID)
+	}
+
+	// Check for JSON-RPC error
+	if resp.Error != nil {
+		return fmt.Errorf("JSON-RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+
+	// Unmarshal result if provided
+	if result != nil && resp.Result != nil {
+		if err := json.Unmarshal(resp.Result, result); err != nil {
+			return fmt.Errorf("failed to unmarshal result: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // notify sends a JSON-RPC notification (no response expected).

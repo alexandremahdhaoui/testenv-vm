@@ -23,13 +23,17 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
 	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/client"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/client/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/orchestrator"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
 
@@ -410,4 +414,95 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// createClientFromArtifact creates a Client from the test environment artifact.
+// Uses ArtifactProvider to extract VM connection info.
+func createClientFromArtifact(t *testing.T, artifact *v1.TestEnvArtifact, vmName string, opts ...client.ClientOption) *client.Client {
+	t.Helper()
+
+	prov := provider.NewArtifactProvider(artifact,
+		provider.WithDefaultUser("testuser"),
+	)
+
+	c, err := client.NewClient(prov, vmName, opts...)
+	require.NoError(t, err, "failed to create client for VM %s", vmName)
+
+	return c
+}
+
+// createMockSSHRunner creates a MockSSHRunner for testing without real SSH.
+func createMockSSHRunner() *client.MockSSHRunner {
+	return client.NewMockSSHRunner()
+}
+
+// createClientWithMockSSH creates a Client with MockSSHRunner for testing
+// command formatting and client behavior without real SSH.
+func createClientWithMockSSH(t *testing.T, artifact *v1.TestEnvArtifact, vmName string) (*client.Client, *client.MockSSHRunner) {
+	t.Helper()
+
+	// Ensure stub key files exist for ArtifactProvider to read
+	ensureStubKeys(t, artifact)
+
+	mockRunner := createMockSSHRunner()
+	mockRunner.DefaultStdout = "ok"
+
+	prov := provider.NewArtifactProvider(artifact,
+		provider.WithDefaultUser("testuser"),
+	)
+
+	c, err := client.NewClient(prov, vmName,
+		client.WithSSHRunner(mockRunner),
+	)
+	require.NoError(t, err, "failed to create client with mock SSH")
+
+	return c, mockRunner
+}
+
+// ensureStubKeys ensures that stub key files referenced in the artifact exist.
+// The stub provider returns paths like /tmp/stub-keys/test-key but doesn't create the files.
+// The artifact contains relative paths like ../../../../stub-keys/test-key.
+// This helper creates minimal valid SSH keys at the correct location.
+func ensureStubKeys(t *testing.T, artifact *v1.TestEnvArtifact) {
+	t.Helper()
+
+	// Get current working directory to resolve relative paths
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+
+	for key, path := range artifact.Files {
+		if !strings.HasPrefix(key, "testenv-vm.key.") {
+			continue
+		}
+
+		// Resolve the path (it's relative to cwd)
+		absPath := path
+		if !filepath.IsAbs(path) {
+			absPath = filepath.Join(cwd, path)
+			absPath = filepath.Clean(absPath)
+		}
+
+		// Create directory if needed
+		dir := filepath.Dir(absPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("failed to create key directory %s: %v", dir, err)
+		}
+
+		// Create a minimal valid SSH private key if it doesn't exist
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			// This is a minimal valid ed25519 private key for testing
+			// It's not a real key, just enough for the SSH library to parse
+			stubKey := `-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACBTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890AAAAA
+EAAAAtAAAAEdBAAAAEdBAAAA3RFU1RLRVkAAAAAAAAA1RFU1RLRVkAAAAAAAAA1RFU1R
+LRVRFVVRFVURFU1RLRVkAAAA=
+-----END OPENSSH PRIVATE KEY-----`
+			if err := os.WriteFile(absPath, []byte(stubKey), 0600); err != nil {
+				t.Fatalf("failed to write stub key to %s: %v", absPath, err)
+			}
+		}
+	}
 }

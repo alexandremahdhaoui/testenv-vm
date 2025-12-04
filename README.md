@@ -13,6 +13,7 @@ testenv-vm solves the infrastructure testing gap for systems requiring actual VM
 - [What problem does testenv-vm solve?](#what-problem-does-testenv-vm-solve)
 - [How do I add testenv-vm to my project?](#how-do-i-add-testenv-vm-to-my-project)
 - [Which providers are supported?](#which-providers-are-supported)
+- [How do I configure the libvirt provider?](#how-do-i-configure-the-libvirt-provider)
 - [How does dependency resolution work?](#how-does-dependency-resolution-work)
 - [What happens if VM creation fails?](#what-happens-if-vm-creation-fails)
 - [How do I test PXE boot scenarios?](#how-do-i-test-pxe-boot-scenarios)
@@ -71,6 +72,10 @@ The mid-term goal is to support these three providers:
 - **libvirt**: Full-featured local virtualization with KVM/QEMU, Linux bridges, dnsmasq
 - **QEMU**: Lightweight direct QEMU process management without libvirt
 - **AWS**: EC2 instances, VPCs, subnets, and security groups
+
+## How do I configure the libvirt provider?
+
+See the [Libvirt Provider Documentation](./docs/libvirt-provider.md) for detailed configuration options, system requirements, network types, cloud-init setup, and troubleshooting.
 
 ## How does dependency resolution work?
 

@@ -28,4 +28,4 @@ go.work
 /testenv-vm
 /tmp/
 /testenv-vm-provider-stub
-
+/testenv-vm-provider-libvirt

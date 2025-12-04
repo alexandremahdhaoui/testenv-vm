@@ -19,7 +19,9 @@ package provider
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
@@ -174,8 +176,8 @@ func TestCallWithIDMismatch(t *testing.T) {
 	}
 }
 
-// TestCallWithTimeout tests that call() times out correctly.
-func TestCallWithTimeout(t *testing.T) {
+// TestCallWithContextTimeout tests that CallWithContext respects context deadlines.
+func TestCallWithContextTimeout(t *testing.T) {
 	// Create a mock process that never responds
 	stdinReader, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -185,11 +187,12 @@ func TestCallWithTimeout(t *testing.T) {
 	defer stdoutWriter.Close()
 
 	client := &Client{
-		stdin:   stdinWriter,
-		stdout:  stdoutReader,
-		scanner: bufio.NewScanner(stdoutReader),
-		encoder: json.NewEncoder(stdinWriter),
-		timeout: 100 * time.Millisecond, // Short timeout for testing
+		stdin:       stdinWriter,
+		stdout:      stdoutReader,
+		scanner:     bufio.NewScanner(stdoutReader),
+		encoder:     json.NewEncoder(stdinWriter),
+		timeout:     DefaultTimeout,
+		initialized: true, // Mark as initialized so Call() works
 	}
 
 	// Drain stdin to prevent blocking
@@ -203,16 +206,20 @@ func TestCallWithTimeout(t *testing.T) {
 		}
 	}()
 
+	// Create a context with a short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
 	start := time.Now()
-	err := client.call("test_method", nil, nil)
+	_, err := client.CallWithContext(ctx, "test_tool", nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 
-	if !strings.Contains(err.Error(), "timeout") {
-		t.Errorf("expected timeout error, got: %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
 	}
 
 	// Verify timeout occurred approximately at the right time

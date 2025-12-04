@@ -87,8 +87,34 @@ func NewTemplateContext() *TemplateContext {
 	}
 }
 
+// hyphenKeyPattern matches template expressions like .Keys.name-with-hyphens.Field
+// and converts them to use index function: (index .Keys "name-with-hyphens").Field
+var hyphenKeyPattern = regexp.MustCompile(`\.(Keys|Networks|VMs)\.([a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9_-])\.(\w+)`)
+
+// preprocessTemplate converts dot notation with hyphens to use index function.
+// For example: {{ .Keys.test-key.PublicKey }} -> {{ (index .Keys "test-key").PublicKey }}
+// This is necessary because Go templates don't support hyphens in identifiers.
+func preprocessTemplate(tmpl string) string {
+	return hyphenKeyPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
+		parts := hyphenKeyPattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		category := parts[1] // Keys, Networks, or VMs
+		name := parts[2]     // the key name (may contain hyphens)
+		field := parts[3]    // PublicKey, IP, etc.
+
+		// Only use index if the name contains a hyphen
+		if strings.Contains(name, "-") {
+			return fmt.Sprintf(`(index .%s "%s").%s`, category, name, field)
+		}
+		return match
+	})
+}
+
 // RenderString renders a single string using Go template syntax.
 // If the string does not contain template syntax, it is returned unchanged.
+// Automatically converts dot notation with hyphens to use index function.
 // Returns an error if the template is invalid or fails to execute.
 func RenderString(tmpl string, ctx *TemplateContext) (string, error) {
 	// Quick check: if no template delimiters, return as-is
@@ -96,7 +122,10 @@ func RenderString(tmpl string, ctx *TemplateContext) (string, error) {
 		return tmpl, nil
 	}
 
-	t, err := template.New("tmpl").Parse(tmpl)
+	// Preprocess to handle hyphens in key names
+	processedTmpl := preprocessTemplate(tmpl)
+
+	t, err := template.New("tmpl").Parse(processedTmpl)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template %q: %w", tmpl, err)
 	}

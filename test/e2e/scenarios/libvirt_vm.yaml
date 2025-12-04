@@ -1,0 +1,44 @@
+# Libvirt VM Test Scenario
+# Tests creation of a real VM using the libvirt provider.
+# This scenario requires:
+# - libvirt daemon running
+# - qemu-img installed
+# - genisoimage/mkisofs/xorriso installed
+# - Base image will be automatically downloaded if not cached
+
+providers:
+  - name: libvirt
+    engine: ./build/bin/testenv-vm-provider-libvirt
+    default: true
+    spec: {}
+
+keys:
+  - name: e2e-libvirt-key
+    provider: libvirt
+    spec:
+      type: ed25519
+
+networks:
+  - name: e2e-libvirt-network
+    kind: nat
+    provider: libvirt
+    spec:
+      cidr: "192.168.230.0/24"
+
+vms:
+  - name: e2e-libvirt-vm
+    provider: libvirt
+    spec:
+      memory: 512
+      vcpus: 1
+      network: e2e-libvirt-network
+      disk:
+        baseImage: "{{ .Env.TESTENV_VM_BASE_IMAGE }}"
+        size: 5G
+      cloudInit:
+        hostname: e2e-libvirt-vm
+        users:
+          - name: testuser
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.e2e-libvirt-key.PublicKey }}"
