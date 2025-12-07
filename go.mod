@@ -21,5 +21,3 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/alexandremahdhaoui/forge => /home/alexandremahdhaoui/workspaces/forge
