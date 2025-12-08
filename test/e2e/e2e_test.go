@@ -495,3 +495,55 @@ func TestClientFileCopyFormatting(t *testing.T) {
 	}
 	assert.True(t, found, "expected base64 copy command, got: %v", commands)
 }
+
+// TestTemplatedAttachTo verifies that templated attachTo fields work correctly.
+// This is the primary bug fix validation test for the attachTo validation bug.
+// The scenario uses a network with attachTo: "{{ .Networks.parent-bridge.InterfaceName }}"
+// which previously failed validation before template expansion.
+func TestTemplatedAttachTo(t *testing.T) {
+	// Load the templated attachTo scenario
+	spec := loadScenario(t, "templated_attachto.yaml")
+
+	// Create the test environment
+	env := createTestenv(t, spec)
+	defer func() {
+		if err := deleteTestenv(t, env); err != nil {
+			t.Errorf("failed to delete test environment: %v", err)
+		}
+	}()
+
+	// Verify artifact was created
+	assertArtifactNotNil(t, env)
+
+	// Verify parent-bridge network was created
+	parentNetwork := getNetwork(t, env, "parent-bridge")
+	if parentNetwork.Name != "parent-bridge" {
+		t.Errorf("network name mismatch: expected parent-bridge, got %s", parentNetwork.Name)
+	}
+
+	// Verify child-network was created (this is the network with templated attachTo)
+	childNetwork := getNetwork(t, env, "child-network")
+	if childNetwork.Name != "child-network" {
+		t.Errorf("network name mismatch: expected child-network, got %s", childNetwork.Name)
+	}
+
+	// Verify VM was created
+	vm := getVM(t, env, "test-vm")
+	if vm.Name != "test-vm" {
+		t.Errorf("VM name mismatch: expected test-vm, got %s", vm.Name)
+	}
+
+	// Verify key was created
+	key := getKey(t, env, "test-key")
+	if key.Name != "test-key" {
+		t.Errorf("key name mismatch: expected test-key, got %s", key.Name)
+	}
+
+	// Verify managed resources contain all expected resource URIs
+	assertManagedResourcesContains(t, env,
+		"testenv-vm://key/test-key",
+		"testenv-vm://network/parent-bridge",
+		"testenv-vm://network/child-network",
+		"testenv-vm://vm/test-vm",
+	)
+}

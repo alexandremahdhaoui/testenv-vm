@@ -1,5 +1,7 @@
 github.com/alexandremahdhaoui/forge v0.22.0 h1:mDZpB1JnaFjmocS4bUdDAYSqdaLVvU+GzKbR89VBPyg=
 github.com/alexandremahdhaoui/forge v0.22.0/go.mod h1:7XaVQ+SBQudRsN8CSvOO3bEy9whQpp2DTD1fTZhjCfQ=
+github.com/alexandremahdhaoui/forge v0.23.0 h1:Do8ZUF+0F7/D4ruvBBrq/VIMWNlRBiob3ym5tY8xRDY=
+github.com/alexandremahdhaoui/forge v0.23.0/go.mod h1:7XaVQ+SBQudRsN8CSvOO3bEy9whQpp2DTD1fTZhjCfQ=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/digitalocean/go-libvirt v0.0.0-20251202224409-8b0babaf9393 h1:hCM2P/eR7IB06OpCMOMzCavv2e1vr4lo6xO7Z+bMMlI=

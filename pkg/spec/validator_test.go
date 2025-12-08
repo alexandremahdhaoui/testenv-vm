@@ -688,6 +688,45 @@ func TestValidateCrossReferences(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "templated attachTo passes Phase 1 validation",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.parent-net.InterfaceName }}",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "templated attachTo with typo fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.typo-net.InterfaceName }}",
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "template reference to non-existent network",
+		},
 	}
 
 	for _, tt := range tests {
@@ -700,6 +739,537 @@ func TestValidateCrossReferences(t *testing.T) {
 			if tt.wantErr && tt.errSubstr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
 					t.Errorf("Validate() error = %v, want error containing %q", err, tt.errSubstr)
+				}
+			}
+		})
+	}
+}
+
+func TestIsTemplated(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "empty string returns false",
+			input:    "",
+			expected: false,
+		},
+		{
+			name:     "literal value returns false",
+			input:    "literal-value",
+			expected: false,
+		},
+		{
+			name:     "template expression returns true",
+			input:    "{{ .Networks.foo.Name }}",
+			expected: true,
+		},
+		{
+			name:     "embedded template returns true",
+			input:    "prefix-{{ .Keys.x.PublicKey }}-suffix",
+			expected: true,
+		},
+		{
+			name:     "single brace returns false",
+			input:    "{ not a template }",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsTemplated(tt.input)
+			if result != tt.expected {
+				t.Errorf("IsTemplated(%q) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNewTemplatedFields(t *testing.T) {
+	tf := NewTemplatedFields()
+
+	if tf == nil {
+		t.Fatal("NewTemplatedFields() returned nil")
+	}
+
+	if tf.NetworkAttachTo == nil {
+		t.Error("NetworkAttachTo map is nil")
+	}
+
+	if tf.VMNetwork == nil {
+		t.Error("VMNetwork map is nil")
+	}
+
+	// Test that maps can store and retrieve values
+	tf.NetworkAttachTo["test-net"] = true
+	tf.VMNetwork["test-vm"] = true
+
+	if !tf.NetworkAttachTo["test-net"] {
+		t.Error("NetworkAttachTo map failed to store value")
+	}
+
+	if !tf.VMNetwork["test-vm"] {
+		t.Error("VMNetwork map failed to store value")
+	}
+}
+
+func TestValidateTemplateRefsExist(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      *v1.TestenvSpec
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name: "valid template ref to existing network passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.parent-net.InterfaceName }}",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "template ref to non-existent network fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.typo-net.InterfaceName }}",
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "template reference to non-existent network",
+		},
+		{
+			name: "template ref to non-existent key fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							CloudInit: &v1.CloudInitSpec{
+								Users: []v1.UserSpec{
+									{
+										Name:              "testuser",
+										SSHAuthorizedKeys: []string{"{{ .Keys.nonexistent.PublicKey }}"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "template reference to non-existent key",
+		},
+		{
+			name: "valid template ref to existing key passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Keys: []v1.KeyResource{
+					{Name: "my-key", Spec: v1.KeySpec{Type: "ed25519"}},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							CloudInit: &v1.CloudInitSpec{
+								Users: []v1.UserSpec{
+									{
+										Name:              "testuser",
+										SSHAuthorizedKeys: []string{"{{ .Keys.my-key.PublicKey }}"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Env references are skipped (no error for missing env vars)",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							Disk: v1.DiskSpec{
+								BaseImage: "{{ .Env.BASE_IMAGE }}",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "spec with no template refs passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "net1", Kind: "bridge"},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemplateRefsExist(tt.spec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateTemplateRefsExist() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("validateTemplateRefsExist() error = %v, want error containing %q", err, tt.errSubstr)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateEarlyTemplatedFields(t *testing.T) {
+	tests := []struct {
+		name                    string
+		spec                    *v1.TestenvSpec
+		expectedNetworkAttachTo map[string]bool
+		expectedVMNetwork       map[string]bool
+	}{
+		{
+			name: "network with templated attachTo is marked",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.parent-net.InterfaceName }}",
+						},
+					},
+				},
+			},
+			expectedNetworkAttachTo: map[string]bool{"child-net": true},
+			expectedVMNetwork:       map[string]bool{},
+		},
+		{
+			name: "network with literal attachTo is not marked",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "parent-net",
+						},
+					},
+				},
+			},
+			expectedNetworkAttachTo: map[string]bool{},
+			expectedVMNetwork:       map[string]bool{},
+		},
+		{
+			name: "VM with templated network is marked",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "test-net", Kind: "bridge"},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "test-vm",
+						Spec: v1.VMSpec{
+							Memory:  1024,
+							VCPUs:   1,
+							Network: "{{ .Networks.test-net.Name }}",
+						},
+					},
+				},
+			},
+			expectedNetworkAttachTo: map[string]bool{},
+			expectedVMNetwork:       map[string]bool{"test-vm": true},
+		},
+		{
+			name: "multiple templated fields are all marked",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Networks: []v1.NetworkResource{
+					{Name: "parent-net", Kind: "bridge"},
+					{
+						Name: "child-net-1",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.parent-net.InterfaceName }}",
+						},
+					},
+					{
+						Name: "child-net-2",
+						Kind: "nat",
+						Spec: v1.NetworkSpec{
+							AttachTo: "{{ .Networks.parent-net.InterfaceName }}",
+						},
+					},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "test-vm",
+						Spec: v1.VMSpec{
+							Memory:  1024,
+							VCPUs:   1,
+							Network: "{{ .Networks.parent-net.Name }}",
+						},
+					},
+				},
+			},
+			expectedNetworkAttachTo: map[string]bool{"child-net-1": true, "child-net-2": true},
+			expectedVMNetwork:       map[string]bool{"test-vm": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templatedFields, err := ValidateEarly(tt.spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if templatedFields == nil {
+				t.Fatal("expected templatedFields to be non-nil")
+			}
+
+			// Check NetworkAttachTo
+			for name, expected := range tt.expectedNetworkAttachTo {
+				if templatedFields.NetworkAttachTo[name] != expected {
+					t.Errorf("NetworkAttachTo[%q] = %v, want %v", name, templatedFields.NetworkAttachTo[name], expected)
+				}
+			}
+			// Ensure no unexpected entries
+			for name := range templatedFields.NetworkAttachTo {
+				if _, ok := tt.expectedNetworkAttachTo[name]; !ok {
+					t.Errorf("unexpected NetworkAttachTo[%q] = true", name)
+				}
+			}
+
+			// Check VMNetwork
+			for name, expected := range tt.expectedVMNetwork {
+				if templatedFields.VMNetwork[name] != expected {
+					t.Errorf("VMNetwork[%q] = %v, want %v", name, templatedFields.VMNetwork[name], expected)
+				}
+			}
+			// Ensure no unexpected entries
+			for name := range templatedFields.VMNetwork {
+				if _, ok := tt.expectedVMNetwork[name]; !ok {
+					t.Errorf("unexpected VMNetwork[%q] = true", name)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateResourceRefsLate(t *testing.T) {
+	fullSpec := &v1.TestenvSpec{
+		Networks: []v1.NetworkResource{
+			{Name: "net1", Kind: "bridge"},
+			{Name: "net2", Kind: "nat"},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		resourceKind    string
+		resourceName    string
+		renderedSpec    interface{}
+		templatedFields *TemplatedFields
+		wantErr         bool
+		errSubstr       string
+	}{
+		{
+			name:         "non-templated network skips validation",
+			resourceKind: "network",
+			resourceName: "net1",
+			renderedSpec: &v1.NetworkResource{
+				Name: "net1",
+				Spec: v1.NetworkSpec{AttachTo: "virbr0"},
+			},
+			templatedFields: NewTemplatedFields(),
+			wantErr:         false,
+		},
+		{
+			name:         "templated network attachTo accepts any non-empty value",
+			resourceKind: "network",
+			resourceName: "net1",
+			renderedSpec: &v1.NetworkResource{
+				Name: "net1",
+				Spec: v1.NetworkSpec{AttachTo: "virbr0"},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: map[string]bool{"net1": true},
+				VMNetwork:       make(map[string]bool),
+			},
+			wantErr: false,
+		},
+		{
+			name:         "templated network attachTo rejects self-reference",
+			resourceKind: "network",
+			resourceName: "net1",
+			renderedSpec: &v1.NetworkResource{
+				Name: "net1",
+				Spec: v1.NetworkSpec{AttachTo: "net1"},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: map[string]bool{"net1": true},
+				VMNetwork:       make(map[string]bool),
+			},
+			wantErr:   true,
+			errSubstr: "cannot reference itself",
+		},
+		{
+			name:         "templated VM network accepts valid network name",
+			resourceKind: "vm",
+			resourceName: "vm1",
+			renderedSpec: &v1.VMResource{
+				Name: "vm1",
+				Spec: v1.VMSpec{Network: "net1", Memory: 1024, VCPUs: 1},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: make(map[string]bool),
+				VMNetwork:       map[string]bool{"vm1": true},
+			},
+			wantErr: false,
+		},
+		{
+			name:         "templated VM network rejects invalid network name",
+			resourceKind: "vm",
+			resourceName: "vm1",
+			renderedSpec: &v1.VMResource{
+				Name: "vm1",
+				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, VCPUs: 1},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: make(map[string]bool),
+				VMNetwork:       map[string]bool{"vm1": true},
+			},
+			wantErr:   true,
+			errSubstr: "not a valid network name",
+		},
+		{
+			name:         "nil templatedFields returns nil (no validation needed)",
+			resourceKind: "network",
+			resourceName: "net1",
+			renderedSpec: &v1.NetworkResource{
+				Name: "net1",
+				Spec: v1.NetworkSpec{AttachTo: "virbr0"},
+			},
+			templatedFields: nil,
+			wantErr:         false,
+		},
+		{
+			name:         "empty attachTo passes for templated network",
+			resourceKind: "network",
+			resourceName: "net1",
+			renderedSpec: &v1.NetworkResource{
+				Name: "net1",
+				Spec: v1.NetworkSpec{AttachTo: ""},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: map[string]bool{"net1": true},
+				VMNetwork:       make(map[string]bool),
+			},
+			wantErr: false,
+		},
+		{
+			name:         "empty network passes for templated VM",
+			resourceKind: "vm",
+			resourceName: "vm1",
+			renderedSpec: &v1.VMResource{
+				Name: "vm1",
+				Spec: v1.VMSpec{Network: "", Memory: 1024, VCPUs: 1},
+			},
+			templatedFields: &TemplatedFields{
+				NetworkAttachTo: make(map[string]bool),
+				VMNetwork:       map[string]bool{"vm1": true},
+			},
+			wantErr: false,
+		},
+		{
+			name:         "non-templated VM skips validation",
+			resourceKind: "vm",
+			resourceName: "vm1",
+			renderedSpec: &v1.VMResource{
+				Name: "vm1",
+				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, VCPUs: 1},
+			},
+			templatedFields: NewTemplatedFields(),
+			wantErr:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateResourceRefsLate(
+				tt.resourceKind,
+				tt.resourceName,
+				tt.renderedSpec,
+				fullSpec,
+				tt.templatedFields,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateResourceRefsLate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("ValidateResourceRefsLate() error = %v, want error containing %q", err, tt.errSubstr)
 				}
 			}
 		})

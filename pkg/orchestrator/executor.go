@@ -57,12 +57,14 @@ func NewExecutor(manager *provider.Manager, store *state.Store) *Executor {
 // ExecuteCreate executes the creation of resources according to the execution plan.
 // Phases are executed sequentially, while resources within each phase are executed in parallel.
 // Templates are rendered just-in-time before each resource creation.
+// The templatedFields parameter indicates which fields need Phase 2 validation after rendering.
 func (e *Executor) ExecuteCreate(
 	ctx context.Context,
 	spec *v1.TestenvSpec,
 	plan [][]v1.ResourceRef,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
+	templatedFields *specpkg.TemplatedFields,
 ) (*ExecutionResult, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("spec cannot be nil")
@@ -83,7 +85,7 @@ func (e *Executor) ExecuteCreate(
 			continue
 		}
 
-		phaseErrors := e.executePhase(ctx, phase, spec, templateCtx, envState)
+		phaseErrors := e.executePhase(ctx, phase, spec, templateCtx, envState, templatedFields)
 		if len(phaseErrors) > 0 {
 			result.Errors = append(result.Errors, phaseErrors...)
 			result.Success = false
@@ -183,6 +185,7 @@ func (e *Executor) executePhase(
 	spec *v1.TestenvSpec,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
+	templatedFields *specpkg.TemplatedFields,
 ) []error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -193,7 +196,7 @@ func (e *Executor) executePhase(
 		go func(r v1.ResourceRef) {
 			defer wg.Done()
 
-			if err := e.createResource(ctx, r, spec, templateCtx, envState); err != nil {
+			if err := e.createResource(ctx, r, spec, templateCtx, envState, templatedFields); err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("failed to create %s/%s: %w", r.Kind, r.Name, err))
 				mu.Unlock()
@@ -206,12 +209,14 @@ func (e *Executor) executePhase(
 }
 
 // createResource creates a single resource using the appropriate provider.
+// After template rendering, Phase 2 validation is performed for templated fields.
 func (e *Executor) createResource(
 	ctx context.Context,
 	ref v1.ResourceRef,
 	spec *v1.TestenvSpec,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
+	templatedFields *specpkg.TemplatedFields,
 ) error {
 	// Determine provider name
 	providerName := ref.Provider
@@ -260,6 +265,10 @@ func (e *Executor) createResource(
 		if err != nil {
 			return fmt.Errorf("failed to render network spec: %w", err)
 		}
+		// Phase 2 validation for templated fields
+		if err := specpkg.ValidateResourceRefsLate("network", ref.Name, renderedSpec, spec, templatedFields); err != nil {
+			return fmt.Errorf("phase 2 validation failed: %w", err)
+		}
 		request = &providerv1.NetworkCreateRequest{
 			Name: ref.Name,
 			Kind: renderedSpec.Kind,
@@ -280,6 +289,10 @@ func (e *Executor) createResource(
 		renderedSpec, err := e.renderVMSpec(vmSpec, templateCtx)
 		if err != nil {
 			return fmt.Errorf("failed to render vm spec: %w", err)
+		}
+		// Phase 2 validation for templated fields
+		if err := specpkg.ValidateResourceRefsLate("vm", ref.Name, renderedSpec, spec, templatedFields); err != nil {
+			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
 		request = &providerv1.VMCreateRequest{
 			Name: ref.Name,

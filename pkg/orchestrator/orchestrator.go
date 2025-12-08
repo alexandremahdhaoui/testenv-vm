@@ -75,8 +75,9 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*v1.T
 		return nil, fmt.Errorf("failed to parse spec: %w", err)
 	}
 
-	// 2. Validate spec using spec.Validate
-	if err := spec.Validate(testenvSpec); err != nil {
+	// 2. Validate spec using spec.ValidateEarly (Phase 1)
+	templatedFields, err := spec.ValidateEarly(testenvSpec)
+	if err != nil {
 		return nil, fmt.Errorf("spec validation failed: %w", err)
 	}
 
@@ -140,8 +141,8 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*v1.T
 		}
 	}
 
-	// 10. Execute phases using executor.ExecuteCreate
-	result, err := o.executor.ExecuteCreate(ctx, testenvSpec, phases, templateCtx, envState)
+	// 10. Execute phases using executor.ExecuteCreate (with templated fields for Phase 2 validation)
+	result, err := o.executor.ExecuteCreate(ctx, testenvSpec, phases, templateCtx, envState, templatedFields)
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %w", err)
 	}

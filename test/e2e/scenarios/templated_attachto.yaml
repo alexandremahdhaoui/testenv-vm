@@ -1,0 +1,63 @@
+# Scenario: Templated attachTo
+# Tests that a network can use a template reference for attachTo
+# This is the bug fix validation scenario for the attachTo validation bug
+
+providers:
+  - name: stub
+    engine: ./build/bin/testenv-vm-provider-stub
+    default: true
+    spec: {}
+
+keys:
+  - name: test-key
+    provider: stub
+    spec:
+      type: ed25519
+      comment: "test-key@templated-attachto-test"
+
+networks:
+  - name: parent-bridge
+    kind: bridge
+    provider: stub
+    spec:
+      cidr: "192.168.100.0/24"
+      gateway: "192.168.100.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.100.100"
+        rangeEnd: "192.168.100.200"
+
+  - name: child-network
+    kind: nat
+    provider: stub
+    spec:
+      # This is the bug fix: templated attachTo should work
+      attachTo: "{{ .Networks.parent-bridge.InterfaceName }}"
+      cidr: "192.168.200.0/24"
+      gateway: "192.168.200.1"
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.200.100"
+        rangeEnd: "192.168.200.200"
+
+vms:
+  - name: test-vm
+    provider: stub
+    spec:
+      memory: 1024
+      vcpus: 1
+      network: child-network
+      disk:
+        baseImage: ubuntu-22.04
+        size: 10G
+      boot:
+        order:
+          - hd
+        firmware: bios
+      cloudInit:
+        hostname: test-vm
+        users:
+          - name: testuser
+            sudo: "ALL=(ALL) NOPASSWD:ALL"
+            sshAuthorizedKeys:
+              - "{{ .Keys.test-key.PublicKey }}"

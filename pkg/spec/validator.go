@@ -30,17 +30,45 @@ var ValidKeyTypes = map[string]bool{
 	"ecdsa":   true,
 }
 
-// Validate validates an entire TestenvSpec.
-// It checks all providers, keys, networks, and VMs for correctness,
-// as well as cross-references between resources.
-func Validate(spec *v1.TestenvSpec) error {
-	if spec == nil {
-		return fmt.Errorf("spec cannot be nil")
+// IsTemplated checks if a string contains Go template syntax.
+// Returns true if the string contains "{{" delimiter.
+func IsTemplated(s string) bool {
+	return strings.Contains(s, "{{")
+}
+
+// TemplatedFields tracks which resource fields contained template syntax
+// during Phase 1 validation. These fields require Phase 2 validation
+// after template rendering.
+type TemplatedFields struct {
+	// NetworkAttachTo maps network names to whether their attachTo field was templated
+	NetworkAttachTo map[string]bool
+	// VMNetwork maps VM names to whether their network field was templated
+	VMNetwork map[string]bool
+}
+
+// NewTemplatedFields creates a new TemplatedFields with initialized maps.
+func NewTemplatedFields() *TemplatedFields {
+	return &TemplatedFields{
+		NetworkAttachTo: make(map[string]bool),
+		VMNetwork:       make(map[string]bool),
 	}
+}
+
+// ValidateEarly performs Phase 1 validation on a TestenvSpec.
+// It validates structure, syntax, and verifies template references point to
+// resources that exist in the spec. Templated fields are marked for Phase 2
+// validation after template rendering.
+// Returns TemplatedFields indicating which fields need Phase 2 validation.
+func ValidateEarly(spec *v1.TestenvSpec) (*TemplatedFields, error) {
+	if spec == nil {
+		return nil, fmt.Errorf("spec cannot be nil")
+	}
+
+	templatedFields := NewTemplatedFields()
 
 	// Validate providers first (other validations depend on provider names)
 	if err := ValidateProviders(spec.Providers); err != nil {
-		return fmt.Errorf("providers validation failed: %w", err)
+		return nil, fmt.Errorf("providers validation failed: %w", err)
 	}
 
 	// Build provider name set for cross-reference validation
@@ -51,44 +79,59 @@ func Validate(spec *v1.TestenvSpec) error {
 
 	// Validate default provider reference if explicitly set
 	if spec.DefaultProvider != "" && !providerNames[spec.DefaultProvider] {
-		return fmt.Errorf("defaultProvider %q does not match any defined provider", spec.DefaultProvider)
+		return nil, fmt.Errorf("defaultProvider %q does not match any defined provider", spec.DefaultProvider)
 	}
 
 	// Check DefaultProvider/Default:true consistency
 	if spec.DefaultProvider != "" {
 		for _, p := range spec.Providers {
 			if p.Default && p.Name != spec.DefaultProvider {
-				return fmt.Errorf("provider %q is marked as default, but defaultProvider is set to %q (these must match)", p.Name, spec.DefaultProvider)
+				return nil, fmt.Errorf("provider %q is marked as default, but defaultProvider is set to %q (these must match)", p.Name, spec.DefaultProvider)
 			}
 		}
 	}
 
 	// Validate keys
 	if err := ValidateKeys(spec.Keys); err != nil {
-		return fmt.Errorf("keys validation failed: %w", err)
+		return nil, fmt.Errorf("keys validation failed: %w", err)
 	}
 
 	// Validate networks
 	if err := ValidateNetworks(spec.Networks); err != nil {
-		return fmt.Errorf("networks validation failed: %w", err)
+		return nil, fmt.Errorf("networks validation failed: %w", err)
 	}
 
 	// Validate VMs
 	if err := ValidateVMs(spec.VMs); err != nil {
-		return fmt.Errorf("vms validation failed: %w", err)
+		return nil, fmt.Errorf("vms validation failed: %w", err)
 	}
 
 	// Validate cross-references: provider references in resources
 	if err := validateProviderRefs(spec, providerNames); err != nil {
-		return err
+		return nil, err
+	}
+
+	// Validate template references point to existing resources
+	if err := validateTemplateRefsExist(spec); err != nil {
+		return nil, err
 	}
 
 	// Validate cross-references: resource references (network.AttachTo, vm.Network)
-	if err := validateResourceRefs(spec); err != nil {
-		return err
+	// Modified to skip templated fields and mark them for Phase 2 validation
+	if err := validateResourceRefs(spec, templatedFields); err != nil {
+		return nil, err
 	}
 
-	return nil
+	return templatedFields, nil
+}
+
+// Validate validates an entire TestenvSpec.
+// This is a convenience wrapper around ValidateEarly that discards the
+// TemplatedFields information. Use ValidateEarly directly if you need
+// to know which fields require Phase 2 validation.
+func Validate(spec *v1.TestenvSpec) error {
+	_, err := ValidateEarly(spec)
+	return err
 }
 
 // ValidateProviders validates provider configurations.
@@ -267,7 +310,8 @@ func validateProviderRefs(spec *v1.TestenvSpec, providerNames map[string]bool) e
 
 // validateResourceRefs validates cross-references between resources.
 // It checks that network.AttachTo and vm.Network reference existing networks.
-func validateResourceRefs(spec *v1.TestenvSpec) error {
+// Templated fields are skipped and marked in templatedFields for Phase 2 validation.
+func validateResourceRefs(spec *v1.TestenvSpec, templatedFields *TemplatedFields) error {
 	// Build network name set
 	networkNames := make(map[string]bool)
 	for _, n := range spec.Networks {
@@ -277,6 +321,12 @@ func validateResourceRefs(spec *v1.TestenvSpec) error {
 	// Check network AttachTo references
 	for _, n := range spec.Networks {
 		if n.Spec.AttachTo != "" {
+			if IsTemplated(n.Spec.AttachTo) {
+				// Mark for Phase 2 validation
+				templatedFields.NetworkAttachTo[n.Name] = true
+				continue
+			}
+			// Literal value - validate now
 			if n.Spec.AttachTo == n.Name {
 				return fmt.Errorf("network %q: attachTo cannot reference itself", n.Name)
 			}
@@ -288,9 +338,146 @@ func validateResourceRefs(spec *v1.TestenvSpec) error {
 
 	// Check VM network references
 	for _, vm := range spec.VMs {
-		if vm.Spec.Network != "" && !networkNames[vm.Spec.Network] {
-			return fmt.Errorf("vm %q: network %q not found", vm.Name, vm.Spec.Network)
+		if vm.Spec.Network != "" {
+			if IsTemplated(vm.Spec.Network) {
+				// Mark for Phase 2 validation
+				templatedFields.VMNetwork[vm.Name] = true
+				continue
+			}
+			// Literal value - validate now
+			if !networkNames[vm.Spec.Network] {
+				return fmt.Errorf("vm %q: network %q not found", vm.Name, vm.Spec.Network)
+			}
 		}
+	}
+
+	return nil
+}
+
+// validateTemplateRefsExist validates that all template references in the spec
+// point to resources that actually exist in the spec. This catches typos like
+// {{ .Networks.typo.InterfaceName }} early, before any resources are created.
+// Note: .Env references are skipped as they come from runtime input.
+func validateTemplateRefsExist(spec *v1.TestenvSpec) error {
+	// Build resource name sets
+	keyNames := make(map[string]bool)
+	for _, k := range spec.Keys {
+		keyNames[k.Name] = true
+	}
+	networkNames := make(map[string]bool)
+	for _, n := range spec.Networks {
+		networkNames[n.Name] = true
+	}
+	vmNames := make(map[string]bool)
+	for _, vm := range spec.VMs {
+		vmNames[vm.Name] = true
+	}
+
+	// Extract all template refs from spec
+	refs := ExtractTemplateRefs(spec)
+
+	// Validate each ref exists
+	for _, ref := range refs {
+		switch ref.Kind {
+		case "key":
+			if !keyNames[ref.Name] {
+				return fmt.Errorf("template reference to non-existent key %q", ref.Name)
+			}
+		case "network":
+			if !networkNames[ref.Name] {
+				return fmt.Errorf("template reference to non-existent network %q", ref.Name)
+			}
+		case "vm":
+			if !vmNames[ref.Name] {
+				return fmt.Errorf("template reference to non-existent vm %q", ref.Name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ValidateResourceRefsLate performs Phase 2 validation on a rendered resource.
+// It validates only fields that were templated in Phase 1, after template
+// rendering has resolved the values.
+//
+// For network attachTo: accepts any non-empty resolved value. The provider
+// is responsible for validating that the interface exists on the host.
+//
+// For vm.Network: verifies the resolved value is a valid network name from
+// the spec, since VMs must reference networks by their logical name.
+func ValidateResourceRefsLate(
+	resourceKind string,
+	resourceName string,
+	renderedSpec interface{},
+	fullSpec *v1.TestenvSpec,
+	templatedFields *TemplatedFields,
+) error {
+	if templatedFields == nil {
+		return nil
+	}
+
+	switch resourceKind {
+	case "network":
+		// Check if attachTo was templated for this network
+		if !templatedFields.NetworkAttachTo[resourceName] {
+			return nil // Not templated, already validated in Phase 1
+		}
+
+		// Get rendered attachTo value
+		networkSpec, ok := renderedSpec.(*v1.NetworkResource)
+		if !ok {
+			return fmt.Errorf("invalid network spec type")
+		}
+
+		attachTo := networkSpec.Spec.AttachTo
+		if attachTo == "" {
+			return nil // Empty is valid (optional field)
+		}
+
+		// Check for self-reference after rendering
+		if attachTo == resourceName {
+			return fmt.Errorf("network %q: rendered attachTo cannot reference itself", resourceName)
+		}
+
+		// For templated attachTo: accept non-empty value
+		// Provider validates if interface exists on host
+		return nil
+
+	case "vm":
+		// Check if network was templated for this VM
+		if !templatedFields.VMNetwork[resourceName] {
+			return nil // Not templated, already validated in Phase 1
+		}
+
+		// Get rendered network value
+		vmSpec, ok := renderedSpec.(*v1.VMResource)
+		if !ok {
+			return fmt.Errorf("invalid vm spec type")
+		}
+
+		network := vmSpec.Spec.Network
+		if network == "" {
+			return nil // Empty is valid (optional field)
+		}
+
+		// Build network name set
+		networkNames := make(map[string]bool)
+		for _, n := range fullSpec.Networks {
+			networkNames[n.Name] = true
+		}
+
+		// Verify resolved value is a valid network name
+		if !networkNames[network] {
+			var available []string
+			for name := range networkNames {
+				available = append(available, name)
+			}
+			return fmt.Errorf("vm %q: rendered network value %q is not a valid network name (available: %v)",
+				resourceName, network, available)
+		}
+
+		return nil
 	}
 
 	return nil
