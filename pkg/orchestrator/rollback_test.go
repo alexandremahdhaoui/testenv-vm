@@ -22,14 +22,26 @@ import (
 	"testing"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
 
-func TestExecutor_Rollback_NilState(t *testing.T) {
+// newTestExecutorForRollback creates an Executor for testing with a temporary image cache.
+func newTestExecutorForRollback(t *testing.T) (*Executor, *state.Store) {
+	t.Helper()
 	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	stateDir := t.TempDir()
+	store := state.NewStore(stateDir)
+	imageMgr, err := image.NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create image cache manager: %v", err)
+	}
+	return NewExecutor(manager, store, imageMgr), store
+}
+
+func TestExecutor_Rollback_NilState(t *testing.T) {
+	executor, _ := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	errors := executor.Rollback(ctx, nil)
@@ -43,10 +55,7 @@ func TestExecutor_Rollback_NilState(t *testing.T) {
 }
 
 func TestExecutor_Rollback_EmptyPlan(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -73,10 +82,7 @@ func TestExecutor_Rollback_EmptyPlan(t *testing.T) {
 }
 
 func TestExecutor_Rollback_EmptyPhases(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -105,10 +111,7 @@ func TestExecutor_Rollback_EmptyPhases(t *testing.T) {
 }
 
 func TestExecutor_Rollback_SkipsDestroyedResources(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -145,10 +148,7 @@ func TestExecutor_Rollback_SkipsDestroyedResources(t *testing.T) {
 }
 
 func TestExecutor_Rollback_SkipsResourceNotInState(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -180,10 +180,7 @@ func TestExecutor_Rollback_SkipsResourceNotInState(t *testing.T) {
 }
 
 func TestExecutor_Rollback_UpdatesStatus(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -234,10 +231,7 @@ func TestExecutor_Rollback_ContinuesOnError(t *testing.T) {
 	// Since we don't have mock providers, we'll test with resources that have
 	// providers but the provider is not running (will fail)
 
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -282,10 +276,7 @@ func TestExecutor_Rollback_ContinuesOnError(t *testing.T) {
 }
 
 func TestExecutor_RollbackPhase_EmptyPhase(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -311,10 +302,7 @@ func TestExecutor_RollbackPhase_EmptyPhase(t *testing.T) {
 }
 
 func TestExecutor_RollbackPhase_SkipsDestroyedResource(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -347,10 +335,7 @@ func TestExecutor_RollbackPhase_ParallelDeletion(t *testing.T) {
 	// We test this by checking that multiple resources in the same phase
 	// are processed (even if they fail due to no provider)
 
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -391,10 +376,7 @@ func TestExecutor_Rollback_ReversePhaseOrder(t *testing.T) {
 	// We can't easily verify order without mocks, but we can verify the
 	// structure is set up correctly
 
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -434,10 +416,7 @@ func TestExecutor_Rollback_ReversePhaseOrder(t *testing.T) {
 }
 
 func TestExecutor_Rollback_RecordsErrors(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -484,10 +463,7 @@ func TestExecutor_Rollback_RecordsErrors(t *testing.T) {
 }
 
 func TestExecutor_RollbackPhase_NoProviderForResource(t *testing.T) {
-	manager := provider.NewManager()
-	stateDir := t.TempDir()
-	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	executor, store := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{

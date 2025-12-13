@@ -22,16 +22,33 @@ import (
 	"testing"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
 
+// newTestExecutor creates an Executor for testing with a temporary image cache.
+func newTestExecutor(t *testing.T) *Executor {
+	t.Helper()
+	manager := provider.NewManager()
+	store := state.NewStore(t.TempDir())
+	imageMgr, err := image.NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create image cache manager: %v", err)
+	}
+	return NewExecutor(manager, store, imageMgr)
+}
+
 func TestNewExecutor(t *testing.T) {
 	manager := provider.NewManager()
 	store := state.NewStore(t.TempDir())
+	imageMgr, err := image.NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create image cache manager: %v", err)
+	}
 
-	executor := NewExecutor(manager, store)
+	executor := NewExecutor(manager, store, imageMgr)
 
 	if executor == nil {
 		t.Fatal("NewExecutor returned nil")
@@ -42,12 +59,13 @@ func TestNewExecutor(t *testing.T) {
 	if executor.store == nil {
 		t.Error("executor.store is nil")
 	}
+	if executor.imageMgr == nil {
+		t.Error("executor.imageMgr is nil")
+	}
 }
 
 func TestExecutor_ExecuteCreate_NilSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -62,9 +80,7 @@ func TestExecutor_ExecuteCreate_NilSpec(t *testing.T) {
 }
 
 func TestExecutor_ExecuteCreate_NilState(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 	testenvSpec := &v1.TestenvSpec{}
@@ -76,9 +92,7 @@ func TestExecutor_ExecuteCreate_NilState(t *testing.T) {
 }
 
 func TestExecutor_ExecuteCreate_EmptyPlan(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 	testenvSpec := &v1.TestenvSpec{}
@@ -104,9 +118,7 @@ func TestExecutor_ExecuteCreate_EmptyPlan(t *testing.T) {
 }
 
 func TestExecutor_ExecuteDelete_NilState(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 
@@ -117,9 +129,7 @@ func TestExecutor_ExecuteDelete_NilState(t *testing.T) {
 }
 
 func TestExecutor_ExecuteDelete_EmptyPlan(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -142,10 +152,7 @@ func TestExecutor_ExecuteDelete_EmptyPlan(t *testing.T) {
 func TestExecutor_ExecuteDelete_ReversePhaseOrder(t *testing.T) {
 	// This test verifies that phases are reversed for deletion
 	// Without mocking, we can only verify the structure is correct
-
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	ctx := context.Background()
 	envState := &v1.EnvironmentState{
@@ -175,9 +182,7 @@ func TestExecutor_ExecuteDelete_ReversePhaseOrder(t *testing.T) {
 }
 
 func TestExecutor_findKeySpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	testenvSpec := &v1.TestenvSpec{
 		Keys: []v1.KeyResource{
@@ -225,9 +230,7 @@ func TestExecutor_findKeySpec(t *testing.T) {
 }
 
 func TestExecutor_findNetworkSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	testenvSpec := &v1.TestenvSpec{
 		Networks: []v1.NetworkResource{
@@ -270,9 +273,7 @@ func TestExecutor_findNetworkSpec(t *testing.T) {
 }
 
 func TestExecutor_findVMSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	testenvSpec := &v1.TestenvSpec{
 		VMs: []v1.VMResource{
@@ -315,9 +316,7 @@ func TestExecutor_findVMSpec(t *testing.T) {
 }
 
 func TestExecutor_updateResourceState(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	envState := &v1.EnvironmentState{
 		ID:     "test-1",
@@ -402,9 +401,7 @@ func TestExecutor_updateResourceState(t *testing.T) {
 }
 
 func TestExecutor_getResourceState(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	envState := &v1.EnvironmentState{
 		ID:     "test-1",
@@ -465,9 +462,7 @@ func TestExecutor_getResourceState(t *testing.T) {
 }
 
 func TestExecutor_getResourceState_NilMaps(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	envState := &v1.EnvironmentState{
 		ID:        "test-1",
@@ -493,9 +488,7 @@ func TestExecutor_getResourceState_NilMaps(t *testing.T) {
 }
 
 func TestExecutor_updateTemplateContext(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 
@@ -550,18 +543,14 @@ func TestExecutor_updateTemplateContext(t *testing.T) {
 }
 
 func TestExecutor_updateTemplateContext_NilContext(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	// Should not panic with nil context
 	executor.updateTemplateContext(nil, v1.ResourceRef{Kind: "key", Name: "key1"}, map[string]any{})
 }
 
 func TestExecutor_updateTemplateContext_NilData(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 
@@ -570,9 +559,7 @@ func TestExecutor_updateTemplateContext_NilData(t *testing.T) {
 }
 
 func TestExecutor_convertResourceToMap(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	tests := []struct {
 		name     string
@@ -660,9 +647,7 @@ func TestGetString(t *testing.T) {
 }
 
 func TestExecutor_renderKeySpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 	templateCtx.Env["OUTPUT_DIR"] = "/tmp/keys"
@@ -694,9 +679,7 @@ func TestExecutor_renderKeySpec(t *testing.T) {
 }
 
 func TestExecutor_renderNetworkSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 	templateCtx.Networks["base"] = spec.NetworkTemplateData{
@@ -730,9 +713,7 @@ func TestExecutor_renderNetworkSpec(t *testing.T) {
 }
 
 func TestExecutor_renderVMSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 	templateCtx.Keys["ssh"] = spec.KeyTemplateData{
@@ -787,9 +768,7 @@ func TestExecutor_renderVMSpec(t *testing.T) {
 }
 
 func TestExecutor_convertNetworkSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
 		CIDR:     "192.168.1.0/24",
@@ -836,9 +815,7 @@ func TestExecutor_convertNetworkSpec(t *testing.T) {
 }
 
 func TestExecutor_convertNetworkSpec_NilSubspecs(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
 		CIDR: "192.168.1.0/24",
@@ -859,9 +836,7 @@ func TestExecutor_convertNetworkSpec_NilSubspecs(t *testing.T) {
 }
 
 func TestExecutor_convertVMSpec(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	vmSpec := v1.VMSpec{
 		Memory:  2048,
@@ -930,9 +905,7 @@ func TestExecutor_convertVMSpec(t *testing.T) {
 }
 
 func TestExecutor_convertVMSpec_NilSubspecs(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	vmSpec := v1.VMSpec{
 		Memory:  1024,
@@ -954,10 +927,14 @@ func TestExecutor_convertVMSpec_NilSubspecs(t *testing.T) {
 }
 
 func TestExecutor_ExecuteCreate_SkipsEmptyPhases(t *testing.T) {
-	manager := provider.NewManager()
 	stateDir := t.TempDir()
+	manager := provider.NewManager()
 	store := state.NewStore(stateDir)
-	executor := NewExecutor(manager, store)
+	imageMgr, err := image.NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("failed to create image cache manager: %v", err)
+	}
+	executor := NewExecutor(manager, store, imageMgr)
 
 	ctx := context.Background()
 	testenvSpec := &v1.TestenvSpec{}
@@ -993,9 +970,7 @@ func TestExecutor_ExecuteCreate_SkipsEmptyPhases(t *testing.T) {
 }
 
 func TestExecutor_updateResourceState_InitializesMaps(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	// Start with nil maps
 	envState := &v1.EnvironmentState{
@@ -1049,9 +1024,7 @@ func TestExecutor_updateResourceState_InitializesMaps(t *testing.T) {
 }
 
 func TestExecutor_updateTemplateContext_AllKinds(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	// Start with nil maps in template context
 	templateCtx := &spec.TemplateContext{}
@@ -1103,9 +1076,7 @@ func TestExecutor_updateTemplateContext_AllKinds(t *testing.T) {
 }
 
 func TestExecutor_updateResourceState_UnknownKind(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	envState := &v1.EnvironmentState{
 		ID:     "test-1",
@@ -1140,9 +1111,7 @@ func TestExecutor_updateResourceState_UnknownKind(t *testing.T) {
 }
 
 func TestExecutor_updateTemplateContext_UnknownKind(t *testing.T) {
-	manager := provider.NewManager()
-	store := state.NewStore(t.TempDir())
-	executor := NewExecutor(manager, store)
+	executor := newTestExecutor(t)
 
 	templateCtx := spec.NewTemplateContext()
 

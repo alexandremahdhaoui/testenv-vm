@@ -24,6 +24,7 @@ import (
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
 	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	specpkg "github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
@@ -31,9 +32,10 @@ import (
 
 // Executor executes resource operations using providers.
 type Executor struct {
-	manager *provider.Manager
-	store   *state.Store
-	mu      sync.Mutex // Protects state modifications during parallel execution
+	manager  *provider.Manager
+	store    *state.Store
+	imageMgr *image.CacheManager
+	mu       sync.Mutex // Protects state modifications during parallel execution
 }
 
 // ExecutionResult contains the result of an execution operation.
@@ -46,11 +48,12 @@ type ExecutionResult struct {
 	State *v1.EnvironmentState
 }
 
-// NewExecutor creates a new Executor with the given provider manager and state store.
-func NewExecutor(manager *provider.Manager, store *state.Store) *Executor {
+// NewExecutor creates a new Executor with the given provider manager, state store, and image cache manager.
+func NewExecutor(manager *provider.Manager, store *state.Store, imageMgr *image.CacheManager) *Executor {
 	return &Executor{
-		manager: manager,
-		store:   store,
+		manager:  manager,
+		store:    store,
+		imageMgr: imageMgr,
 	}
 }
 
@@ -303,6 +306,35 @@ func (e *Executor) createResource(
 			providerName = renderedSpec.Provider
 		}
 
+	case "image":
+		// Images are handled by the CacheManager, not by providers
+		imageRes, err := e.findImageSpec(spec, ref.Name)
+		if err != nil {
+			return err
+		}
+		imgState, err := e.imageMgr.EnsureImage(ctx, ref.Name, imageRes.Spec)
+		if err != nil {
+			return fmt.Errorf("failed to ensure image %q: %w", ref.Name, err)
+		}
+		// Update template context with image path
+		e.mu.Lock()
+		if templateCtx.Images == nil {
+			templateCtx.Images = make(map[string]specpkg.ImageTemplateData)
+		}
+		templateCtx.Images[ref.Name] = specpkg.ImageTemplateData{
+			Path: imgState.LocalPath,
+			Name: ref.Name,
+		}
+		// Also register alias if set
+		if imageRes.Spec.Alias != "" {
+			templateCtx.Images[imageRes.Spec.Alias] = specpkg.ImageTemplateData{
+				Path: imgState.LocalPath,
+				Name: ref.Name,
+			}
+		}
+		e.mu.Unlock()
+		return nil
+
 	default:
 		return fmt.Errorf("unknown resource kind: %s", ref.Kind)
 	}
@@ -464,6 +496,16 @@ func (e *Executor) findVMSpec(spec *v1.TestenvSpec, name string) (*v1.VMResource
 		}
 	}
 	return nil, fmt.Errorf("vm resource %q not found in spec", name)
+}
+
+// findImageSpec finds an image resource by name in the spec.
+func (e *Executor) findImageSpec(spec *v1.TestenvSpec, name string) (*v1.ImageResource, error) {
+	for i := range spec.Images {
+		if spec.Images[i].Name == name {
+			return &spec.Images[i], nil
+		}
+	}
+	return nil, fmt.Errorf("image resource %q not found in spec", name)
 }
 
 // renderKeySpec creates a deep copy and renders templates in a key spec.

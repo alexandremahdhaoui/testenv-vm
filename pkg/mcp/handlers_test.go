@@ -26,18 +26,25 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/orchestrator"
 )
 
-func TestHandleCreate_Success(t *testing.T) {
+// newTestOrchestrator creates an orchestrator with temporary directories for testing.
+func newTestOrchestrator(t *testing.T) *orchestrator.Orchestrator {
+	t.Helper()
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
 	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
+		StateDir:         filepath.Join(tmpDir, "state"),
+		ImageCacheDir:    filepath.Join(tmpDir, "images"),
 		CleanupOnFailure: true,
 	})
 	if err != nil {
 		t.Fatalf("failed to create orchestrator: %v", err)
 	}
-	defer orch.Close()
+	t.Cleanup(func() { _ = orch.Close() })
+	return orch
+}
+
+func TestHandleCreate_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -76,16 +83,7 @@ func TestHandleCreate_Success(t *testing.T) {
 
 func TestHandleCreate_OrchestratorError(t *testing.T) {
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -113,16 +111,7 @@ func TestHandleCreate_OrchestratorError(t *testing.T) {
 
 func TestHandleCreate_InvalidSpec(t *testing.T) {
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -151,17 +140,7 @@ func TestHandleCreate_InvalidSpec(t *testing.T) {
 }
 
 func TestHandleDelete_Success(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -187,18 +166,7 @@ func TestHandleDelete_OrchestratorError(t *testing.T) {
 	// we need to simulate a scenario where the orchestrator would return an error.
 	// However, the current orchestrator implementation is best-effort for delete,
 	// so we test the handler logic with a different approach.
-
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -418,16 +386,7 @@ func TestHandleCreate_InputConversion(t *testing.T) {
 	// Test that the input conversion from engineframework types to v1 types
 	// is handled correctly
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -466,17 +425,7 @@ func TestHandleCreate_InputConversion(t *testing.T) {
 func TestHandleDelete_InputConversion(t *testing.T) {
 	// Test that the input conversion from engineframework types to v1 types
 	// is handled correctly for delete
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -510,16 +459,7 @@ func TestHandleCreate_EmptyTestID(t *testing.T) {
 	// This tests the handler's behavior when TestID is empty
 	// The orchestrator should handle this, but the MCP handler validates first
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {
@@ -552,17 +492,7 @@ func TestHandleCreate_EmptyTestID(t *testing.T) {
 }
 
 func TestHandleDelete_EmptyTestID(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-
-	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
-		StateDir:         stateDir,
-		CleanupOnFailure: true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-	defer orch.Close()
+	orch := newTestOrchestrator(t)
 
 	server, err := NewServer(orch, "testenv-vm", "1.0.0")
 	if err != nil {

@@ -800,3 +800,215 @@ func TestDAG_HasCycle_LongChain(t *testing.T) {
 		t.Error("HasCycle() should detect cycle after adding closing edge")
 	}
 }
+
+func TestBuildDAG_WithImages(t *testing.T) {
+	// Test that spec with images, keys, and VMs includes images in phase 0
+	spec := &v1.TestenvSpec{
+		Images: []v1.ImageResource{
+			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+		},
+		Keys: []v1.KeyResource{
+			{Name: "ssh-key", Spec: v1.KeySpec{Type: "ed25519"}},
+		},
+		VMs: []v1.VMResource{
+			{
+				Name: "test-vm",
+				Spec: v1.VMSpec{
+					Memory: 1024,
+					VCPUs:  1,
+				},
+			},
+		},
+	}
+
+	dag, err := BuildDAG(spec)
+	if err != nil {
+		t.Fatalf("BuildDAG() error = %v", err)
+	}
+
+	// Should have 3 nodes: 1 image + 1 key + 1 VM
+	if dag.NodeCount() != 3 {
+		t.Errorf("expected 3 nodes, got %d", dag.NodeCount())
+	}
+
+	// Verify image node exists
+	imageRef := v1.ResourceRef{Kind: "image", Name: "ubuntu"}
+	imageNode := dag.GetNode(imageRef)
+	if imageNode == nil {
+		t.Error("image node should exist")
+	}
+
+	// Verify topological sort places images in phase 0
+	phases, err := dag.TopologicalSort()
+	if err != nil {
+		t.Fatalf("TopologicalSort() error = %v", err)
+	}
+
+	// Find which phase contains the image
+	imageInPhase0 := false
+	for _, ref := range phases[0] {
+		if ref.Kind == "image" && ref.Name == "ubuntu" {
+			imageInPhase0 = true
+			break
+		}
+	}
+	if !imageInPhase0 {
+		t.Error("image should be in phase 0 (no dependencies)")
+	}
+}
+
+func TestBuildDAG_VMDependsOnImage(t *testing.T) {
+	// Test that VM with image template reference depends on the image
+	spec := &v1.TestenvSpec{
+		Images: []v1.ImageResource{
+			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+		},
+		VMs: []v1.VMResource{
+			{
+				Name: "test-vm",
+				Spec: v1.VMSpec{
+					Memory: 1024,
+					VCPUs:  1,
+					Disk: v1.DiskSpec{
+						BaseImage: "{{ .Images.ubuntu.Path }}",
+					},
+				},
+			},
+		},
+	}
+
+	dag, err := BuildDAG(spec)
+	if err != nil {
+		t.Fatalf("BuildDAG() error = %v", err)
+	}
+
+	// VM should depend on image
+	vmRef := v1.ResourceRef{Kind: "vm", Name: "test-vm"}
+	imageRef := v1.ResourceRef{Kind: "image", Name: "ubuntu"}
+
+	if !dag.DependsOn(vmRef, imageRef) {
+		t.Error("VM should depend on image via template reference")
+	}
+
+	// Verify topological sort places image before VM
+	phases, err := dag.TopologicalSort()
+	if err != nil {
+		t.Fatalf("TopologicalSort() error = %v", err)
+	}
+
+	imagePhase := -1
+	vmPhase := -1
+	for i, phase := range phases {
+		for _, ref := range phase {
+			if ref.Kind == "image" && ref.Name == "ubuntu" {
+				imagePhase = i
+			}
+			if ref.Kind == "vm" && ref.Name == "test-vm" {
+				vmPhase = i
+			}
+		}
+	}
+
+	if imagePhase == -1 {
+		t.Fatal("image not found in any phase")
+	}
+	if vmPhase == -1 {
+		t.Fatal("VM not found in any phase")
+	}
+	if imagePhase >= vmPhase {
+		t.Errorf("image (phase %d) should be before VM (phase %d)", imagePhase, vmPhase)
+	}
+}
+
+func TestBuildDAG_ImageNoDependencies(t *testing.T) {
+	// Test that images have no dependencies
+	spec := &v1.TestenvSpec{
+		Images: []v1.ImageResource{
+			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+		},
+		Keys: []v1.KeyResource{
+			{Name: "ssh-key", Spec: v1.KeySpec{Type: "ed25519"}},
+		},
+		Networks: []v1.NetworkResource{
+			{Name: "test-net", Kind: "bridge"},
+		},
+	}
+
+	dag, err := BuildDAG(spec)
+	if err != nil {
+		t.Fatalf("BuildDAG() error = %v", err)
+	}
+
+	// Image should have no dependencies
+	imageRef := v1.ResourceRef{Kind: "image", Name: "ubuntu"}
+	imageNode := dag.GetNode(imageRef)
+	if imageNode == nil {
+		t.Fatal("image node should exist")
+	}
+	if len(imageNode.Dependencies) != 0 {
+		t.Errorf("image should have no dependencies, got %d", len(imageNode.Dependencies))
+	}
+
+	// Image should not depend on keys or networks
+	keyRef := v1.ResourceRef{Kind: "key", Name: "ssh-key"}
+	netRef := v1.ResourceRef{Kind: "network", Name: "test-net"}
+
+	if dag.DependsOn(imageRef, keyRef) {
+		t.Error("image should not depend on key")
+	}
+	if dag.DependsOn(imageRef, netRef) {
+		t.Error("image should not depend on network")
+	}
+}
+
+func TestBuildDAG_MultipleImages(t *testing.T) {
+	// Test that multiple images are all in the same phase (parallel)
+	spec := &v1.TestenvSpec{
+		Images: []v1.ImageResource{
+			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+			{Name: "debian", Spec: v1.ImageSpec{Source: "debian:12"}},
+			{Name: "fedora", Spec: v1.ImageSpec{Source: "fedora:40"}},
+		},
+	}
+
+	dag, err := BuildDAG(spec)
+	if err != nil {
+		t.Fatalf("BuildDAG() error = %v", err)
+	}
+
+	// Should have 3 image nodes
+	if dag.NodeCount() != 3 {
+		t.Errorf("expected 3 nodes, got %d", dag.NodeCount())
+	}
+
+	// Should have 0 edges (no dependencies between images)
+	if dag.EdgeCount() != 0 {
+		t.Errorf("expected 0 edges, got %d", dag.EdgeCount())
+	}
+
+	// All images should be in the same phase (phase 0)
+	phases, err := dag.TopologicalSort()
+	if err != nil {
+		t.Fatalf("TopologicalSort() error = %v", err)
+	}
+
+	// Should have exactly 1 phase with all 3 images
+	if len(phases) != 1 {
+		t.Errorf("expected 1 phase for independent images, got %d", len(phases))
+	}
+
+	if len(phases[0]) != 3 {
+		t.Errorf("expected 3 images in phase 0, got %d", len(phases[0]))
+	}
+
+	// Verify all are images
+	imageCount := 0
+	for _, ref := range phases[0] {
+		if ref.Kind == "image" {
+			imageCount++
+		}
+	}
+	if imageCount != 3 {
+		t.Errorf("expected 3 images in phase 0, got %d", imageCount)
+	}
+}

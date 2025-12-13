@@ -296,8 +296,10 @@ func TestCleanupOnFailure(t *testing.T) {
 	artifactDir := tmpDir + "/artifacts"
 
 	// Create orchestrator
+	imageCacheDir := filepath.Join(tmpDir, "images")
 	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
 		StateDir:         stateDir,
+		ImageCacheDir:    imageCacheDir,
 		CleanupOnFailure: true,
 	})
 	if err != nil {

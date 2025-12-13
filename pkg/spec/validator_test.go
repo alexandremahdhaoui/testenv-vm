@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 )
 
 func TestValidate(t *testing.T) {
@@ -939,6 +940,76 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "template ref to non-existent image fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							Disk: v1.DiskSpec{
+								BaseImage: "{{ .Images.nonexistent.Path }}",
+							},
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "template reference to non-existent image",
+		},
+		{
+			name: "valid template ref to existing image passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							Disk: v1.DiskSpec{
+								BaseImage: "{{ .Images.ubuntu.Path }}",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "template ref to image alias passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu-24-04", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "ubuntu"}},
+				},
+				VMs: []v1.VMResource{
+					{
+						Name: "vm1",
+						Spec: v1.VMSpec{
+							Memory: 1024,
+							VCPUs:  1,
+							Disk: v1.DiskSpec{
+								BaseImage: "{{ .Images.ubuntu.Path }}",
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "spec with no template refs passes",
 			spec: &v1.TestenvSpec{
 				Providers: []v1.ProviderConfig{
@@ -1270,6 +1341,343 @@ func TestValidateResourceRefsLate(t *testing.T) {
 			if tt.wantErr && tt.errSubstr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
 					t.Errorf("ValidateResourceRefsLate() error = %v, want error containing %q", err, tt.errSubstr)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateImages(t *testing.T) {
+	tests := []struct {
+		name      string
+		spec      *v1.TestenvSpec
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name: "empty images passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid well-known image passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid HTTPS URL with SHA256 passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{
+						Name: "custom",
+						Spec: v1.ImageSpec{
+							Source: "https://example.com/image.qcow2",
+							SHA256: "abc123def456",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "image without name fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "name is required",
+		},
+		{
+			name: "image without source fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "test", Spec: v1.ImageSpec{Source: ""}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "source is required",
+		},
+		{
+			name: "HTTP URL fails (only HTTPS allowed)",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{
+						Name: "test",
+						Spec: v1.ImageSpec{
+							Source: "http://example.com/image.qcow2",
+							SHA256: "abc123",
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "must be well-known reference or HTTPS URL",
+		},
+		{
+			name: "custom URL without SHA256 fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{
+						Name: "test",
+						Spec: v1.ImageSpec{
+							Source: "https://example.com/image.qcow2",
+						},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "custom URL requires sha256 checksum",
+		},
+		{
+			name: "well-known image without SHA256 passes (checksum optional)",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{
+						Name: "ubuntu",
+						Spec: v1.ImageSpec{
+							Source: "ubuntu:24.04",
+							// SHA256 intentionally omitted
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "duplicate image name fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:22.04"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "duplicate image name",
+		},
+		{
+			name: "alias conflicting with name fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
+					{Name: "debian", Spec: v1.ImageSpec{Source: "debian:12", Alias: "ubuntu"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "alias \"ubuntu\" conflicts with another image name",
+		},
+		{
+			name: "name conflicting with prior alias fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "first", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "conflict"}},
+					{Name: "conflict", Spec: v1.ImageSpec{Source: "debian:12"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "name conflicts with alias from image",
+		},
+		{
+			name: "duplicate alias fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "my-image"}},
+					{Name: "debian", Spec: v1.ImageSpec{Source: "debian:12", Alias: "my-image"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "alias \"my-image\" conflicts with alias from image",
+		},
+		{
+			name: "valid alias passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "noble"}},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown source (not well-known, not URL) fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "test", Spec: v1.ImageSpec{Source: "invalid:source"}},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "must be well-known reference or HTTPS URL",
+		},
+		{
+			name: "imageCacheDir with valid path passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				ImageCacheDir: "/tmp/images",
+			},
+			wantErr: false,
+		},
+		{
+			name: "imageCacheDir with whitespace-only fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				ImageCacheDir: "   ",
+			},
+			wantErr:   true,
+			errSubstr: "imageCacheDir cannot be whitespace-only",
+		},
+		{
+			name: "multiple valid images pass",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "noble"}},
+					{Name: "debian", Spec: v1.ImageSpec{Source: "debian:12", Alias: "bookworm"}},
+					{
+						Name: "custom",
+						Spec: v1.ImageSpec{
+							Source: "https://example.com/image.qcow2",
+							SHA256: "abc123",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Validate(tt.spec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("Validate() error = %v, want error containing %q", err, tt.errSubstr)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateImages_WithCustomRegistry(t *testing.T) {
+	// Test with a custom registry to verify well-known image detection
+	// Save original registry and restore after test
+	t.Cleanup(func() {
+		image.ResetRegistry()
+	})
+
+	// Set a test registry with a custom well-known image
+	image.SetRegistry(map[string]image.WellKnownImage{
+		"test:1.0": {
+			Reference:   "test:1.0",
+			URL:         "https://test.example.com/image.qcow2",
+			SHA256:      "",
+			Description: "Test image",
+		},
+	})
+
+	tests := []struct {
+		name      string
+		spec      *v1.TestenvSpec
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name: "custom well-known image passes",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{Name: "test-img", Spec: v1.ImageSpec{Source: "test:1.0"}},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "original well-known image (ubuntu:24.04) now fails",
+			spec: &v1.TestenvSpec{
+				Providers: []v1.ProviderConfig{
+					{Name: "provider1", Engine: "go://test"},
+				},
+				Images: []v1.ImageResource{
+					{
+						Name: "ubuntu",
+						Spec: v1.ImageSpec{Source: "ubuntu:24.04"},
+					},
+				},
+			},
+			wantErr:   true,
+			errSubstr: "must be well-known reference or HTTPS URL",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Validate(tt.spec)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && tt.errSubstr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Errorf("Validate() error = %v, want error containing %q", err, tt.errSubstr)
 				}
 			}
 		})

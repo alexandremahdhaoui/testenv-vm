@@ -147,6 +147,39 @@ func TestRenderString(t *testing.T) {
 			want:    "pubkey and 10.0.0.1",
 			wantErr: false,
 		},
+		{
+			name:  "image path reference",
+			input: "{{ .Images.ubuntu.Path }}",
+			ctx: func() *TemplateContext {
+				ctx := NewTemplateContext()
+				ctx.Images["ubuntu"] = ImageTemplateData{Path: "/cache/ubuntu.qcow2", Name: "ubuntu"}
+				return ctx
+			}(),
+			want:    "/cache/ubuntu.qcow2",
+			wantErr: false,
+		},
+		{
+			name:  "default base image",
+			input: "{{ .DefaultBaseImage }}",
+			ctx: func() *TemplateContext {
+				ctx := NewTemplateContext()
+				ctx.DefaultBaseImage = "/cache/default.qcow2"
+				return ctx
+			}(),
+			want:    "/cache/default.qcow2",
+			wantErr: false,
+		},
+		{
+			name:  "image with hyphens in name",
+			input: "{{ .Images.ubuntu-24-04.Path }}",
+			ctx: func() *TemplateContext {
+				ctx := NewTemplateContext()
+				ctx.Images["ubuntu-24-04"] = ImageTemplateData{Path: "/cache/ubuntu-24-04.qcow2", Name: "ubuntu-24-04"}
+				return ctx
+			}(),
+			want:    "/cache/ubuntu-24-04.qcow2",
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -588,6 +621,86 @@ func TestExtractTemplateRefs(t *testing.T) {
 			t.Errorf("expected to find network reference in providerSpec, got refs: %+v", refs)
 		}
 	})
+
+	t.Run("finds image references", func(t *testing.T) {
+		spec := map[string]any{
+			"disk": map[string]any{
+				"baseImage": "{{ .Images.ubuntu.Path }}",
+			},
+		}
+
+		refs := ExtractTemplateRefs(spec)
+
+		found := false
+		for _, ref := range refs {
+			if ref.Kind == "image" && ref.Name == "ubuntu" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected to find image reference 'ubuntu', got refs: %+v", refs)
+		}
+	})
+
+	t.Run("DefaultBaseImage does not extract ResourceRef", func(t *testing.T) {
+		// {{ .DefaultBaseImage }} is a plain string value, NOT a resource reference
+		// It should NOT be extracted as a ResourceRef
+		spec := map[string]any{
+			"disk": map[string]any{
+				"baseImage": "{{ .DefaultBaseImage }}",
+			},
+		}
+
+		refs := ExtractTemplateRefs(spec)
+
+		// DefaultBaseImage should NOT create any ResourceRef
+		if len(refs) != 0 {
+			t.Errorf("expected no refs for DefaultBaseImage, got: %+v", refs)
+		}
+	})
+
+	t.Run("mixed image and key refs", func(t *testing.T) {
+		spec := map[string]any{
+			"disk":    "{{ .Images.img.Path }}",
+			"sshKeys": "{{ .Keys.key.PublicKey }}",
+		}
+
+		refs := ExtractTemplateRefs(spec)
+
+		imageFound := false
+		keyFound := false
+		for _, ref := range refs {
+			if ref.Kind == "image" && ref.Name == "img" {
+				imageFound = true
+			}
+			if ref.Kind == "key" && ref.Name == "key" {
+				keyFound = true
+			}
+		}
+		if !imageFound || !keyFound {
+			t.Errorf("expected to find both image and key refs, got: %+v", refs)
+		}
+	})
+
+	t.Run("image with hyphens in name", func(t *testing.T) {
+		spec := map[string]any{
+			"disk": "{{ .Images.ubuntu-24-04.Path }}",
+		}
+
+		refs := ExtractTemplateRefs(spec)
+
+		found := false
+		for _, ref := range refs {
+			if ref.Kind == "image" && ref.Name == "ubuntu-24-04" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected to find image reference 'ubuntu-24-04', got refs: %+v", refs)
+		}
+	})
 }
 
 func TestNewTemplateContext(t *testing.T) {
@@ -604,6 +717,9 @@ func TestNewTemplateContext(t *testing.T) {
 	}
 	if ctx.VMs == nil {
 		t.Error("VMs map is nil")
+	}
+	if ctx.Images == nil {
+		t.Error("Images map is nil")
 	}
 	if ctx.Env == nil {
 		t.Error("Env map is nil")

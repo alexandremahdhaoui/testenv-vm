@@ -192,8 +192,10 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 	prepareLibvirtDir(t, artifactDir)
 
 	// Create orchestrator
+	imageCacheDir := filepath.Join(tmpDir, "images")
 	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
 		StateDir:         stateDir,
+		ImageCacheDir:    imageCacheDir,
 		CleanupOnFailure: true,
 	})
 	if err != nil {

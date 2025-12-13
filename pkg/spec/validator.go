@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 )
 
 // ValidKeyTypes defines the allowed key types.
@@ -104,6 +105,11 @@ func ValidateEarly(spec *v1.TestenvSpec) (*TemplatedFields, error) {
 	// Validate VMs
 	if err := ValidateVMs(spec.VMs); err != nil {
 		return nil, fmt.Errorf("vms validation failed: %w", err)
+	}
+
+	// Validate images
+	if err := validateImages(spec); err != nil {
+		return nil, fmt.Errorf("images validation failed: %w", err)
 	}
 
 	// Validate cross-references: provider references in resources
@@ -354,6 +360,80 @@ func validateResourceRefs(spec *v1.TestenvSpec, templatedFields *TemplatedFields
 	return nil
 }
 
+// validateImages validates image resource configurations.
+// It ensures:
+// - Each image has a non-empty Name
+// - Each image has a non-empty Source
+// - Source is either a well-known reference or an HTTPS URL
+// - Custom URLs (non-well-known) require SHA256 checksum
+// - No duplicate image names
+// - Aliases don't conflict with other names/aliases
+func validateImages(spec *v1.TestenvSpec) error {
+	seen := make(map[string]bool)      // tracks image names
+	aliases := make(map[string]string) // maps alias -> image name that owns it
+
+	for i, img := range spec.Images {
+		// Check required name
+		if img.Name == "" {
+			return fmt.Errorf("image at index %d: name is required", i)
+		}
+
+		// Check for duplicate names
+		if seen[img.Name] {
+			return fmt.Errorf("duplicate image name: %q", img.Name)
+		}
+		seen[img.Name] = true
+
+		// Check required source
+		if img.Spec.Source == "" {
+			return fmt.Errorf("image %q: source is required", img.Name)
+		}
+
+		// Validate source is either well-known or HTTPS URL
+		if !image.IsWellKnown(img.Spec.Source) {
+			// Not a well-known image - must be an HTTPS URL
+			if !strings.HasPrefix(img.Spec.Source, "https://") {
+				return fmt.Errorf("image %q: source %q must be well-known reference or HTTPS URL", img.Name, img.Spec.Source)
+			}
+			// Custom HTTPS URLs require SHA256 checksum
+			if img.Spec.SHA256 == "" {
+				return fmt.Errorf("image %q: custom URL requires sha256 checksum", img.Name)
+			}
+		}
+
+		// Validate alias doesn't conflict with names or other aliases
+		if img.Spec.Alias != "" {
+			// Check if alias conflicts with an image name
+			if seen[img.Spec.Alias] {
+				return fmt.Errorf("image %q: alias %q conflicts with another image name", img.Name, img.Spec.Alias)
+			}
+			// Check if alias conflicts with another alias
+			if owner, ok := aliases[img.Spec.Alias]; ok {
+				return fmt.Errorf("image %q: alias %q conflicts with alias from image %q", img.Name, img.Spec.Alias, owner)
+			}
+			aliases[img.Spec.Alias] = img.Name
+		}
+	}
+
+	// Second pass: check that no image name conflicts with an alias from a previous image
+	// (alias declared before the name was processed)
+	for _, img := range spec.Images {
+		if owner, ok := aliases[img.Name]; ok && owner != img.Name {
+			return fmt.Errorf("image %q: name conflicts with alias from image %q", img.Name, owner)
+		}
+	}
+
+	// Validate ImageCacheDir if set (basic path validation)
+	if spec.ImageCacheDir != "" {
+		// Basic validation: must not be empty after trim
+		if strings.TrimSpace(spec.ImageCacheDir) == "" {
+			return fmt.Errorf("imageCacheDir cannot be whitespace-only")
+		}
+	}
+
+	return nil
+}
+
 // validateTemplateRefsExist validates that all template references in the spec
 // point to resources that actually exist in the spec. This catches typos like
 // {{ .Networks.typo.InterfaceName }} early, before any resources are created.
@@ -371,6 +451,14 @@ func validateTemplateRefsExist(spec *v1.TestenvSpec) error {
 	vmNames := make(map[string]bool)
 	for _, vm := range spec.VMs {
 		vmNames[vm.Name] = true
+	}
+	// Build image names set (include both name and alias)
+	imageNames := make(map[string]bool)
+	for _, img := range spec.Images {
+		imageNames[img.Name] = true
+		if img.Spec.Alias != "" {
+			imageNames[img.Spec.Alias] = true
+		}
 	}
 
 	// Extract all template refs from spec
@@ -390,6 +478,10 @@ func validateTemplateRefsExist(spec *v1.TestenvSpec) error {
 		case "vm":
 			if !vmNames[ref.Name] {
 				return fmt.Errorf("template reference to non-existent vm %q", ref.Name)
+			}
+		case "image":
+			if !imageNames[ref.Name] {
+				return fmt.Errorf("template reference to non-existent image %q", ref.Name)
 			}
 		}
 	}

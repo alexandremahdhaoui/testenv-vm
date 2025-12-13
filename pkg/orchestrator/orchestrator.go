@@ -25,6 +25,7 @@ import (
 	"time"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
@@ -34,6 +35,9 @@ import (
 type Config struct {
 	// StateDir is the directory for state files.
 	StateDir string
+	// ImageCacheDir is the directory for caching VM base images.
+	// If empty, defaults to TESTENV_VM_IMAGE_CACHE_DIR env var or /tmp/testenv-vm/images/.
+	ImageCacheDir string
 	// CleanupOnFailure indicates whether to rollback on failure.
 	CleanupOnFailure bool
 }
@@ -54,8 +58,23 @@ func NewOrchestrator(config Config) (*Orchestrator, error) {
 	// Create state store with config.StateDir
 	store := state.NewStore(config.StateDir)
 
-	// Create executor with manager and store
-	executor := NewExecutor(manager, store)
+	// Determine image cache directory
+	imageCacheDir := config.ImageCacheDir
+	if imageCacheDir == "" {
+		imageCacheDir = os.Getenv("TESTENV_VM_IMAGE_CACHE_DIR")
+	}
+	if imageCacheDir == "" {
+		imageCacheDir = "/tmp/testenv-vm/images"
+	}
+
+	// Create image cache manager
+	imageMgr, err := image.NewCacheManager(imageCacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create image cache manager: %w", err)
+	}
+
+	// Create executor with manager, store, and image cache manager
+	executor := NewExecutor(manager, store, imageMgr)
 
 	return &Orchestrator{
 		config:   config,

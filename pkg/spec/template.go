@@ -35,6 +35,12 @@ type TemplateContext struct {
 	Networks map[string]NetworkTemplateData
 	// VMs contains template data for VM resources, keyed by resource name.
 	VMs map[string]VMTemplateData
+	// Images contains template data for image resources, keyed by resource name.
+	Images map[string]ImageTemplateData
+	// DefaultBaseImage is the path to the default base image if configured.
+	// Note: This is a plain string value, NOT a resource reference.
+	// References like {{ .DefaultBaseImage }} should NOT be extracted as ResourceRefs.
+	DefaultBaseImage string
 	// Env contains environment variables available for templates.
 	Env map[string]string
 }
@@ -77,19 +83,28 @@ type VMTemplateData struct {
 	SSHCommand string
 }
 
+// ImageTemplateData contains the template-accessible fields for an image resource.
+type ImageTemplateData struct {
+	// Path is the absolute path to the cached image file.
+	Path string
+	// Name is the image resource name from the spec.
+	Name string
+}
+
 // NewTemplateContext creates a new empty TemplateContext with initialized maps.
 func NewTemplateContext() *TemplateContext {
 	return &TemplateContext{
 		Keys:     make(map[string]KeyTemplateData),
 		Networks: make(map[string]NetworkTemplateData),
 		VMs:      make(map[string]VMTemplateData),
+		Images:   make(map[string]ImageTemplateData),
 		Env:      make(map[string]string),
 	}
 }
 
 // hyphenKeyPattern matches template expressions like .Keys.name-with-hyphens.Field
 // and converts them to use index function: (index .Keys "name-with-hyphens").Field
-var hyphenKeyPattern = regexp.MustCompile(`\.(Keys|Networks|VMs)\.([a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9_-])\.(\w+)`)
+var hyphenKeyPattern = regexp.MustCompile(`\.(Keys|Networks|VMs|Images)\.([a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9_-])\.(\w+)`)
 
 // preprocessTemplate converts dot notation with hyphens to use index function.
 // For example: {{ .Keys.test-key.PublicKey }} -> {{ (index .Keys "test-key").PublicKey }}
@@ -335,6 +350,8 @@ func extractFromValue(v reflect.Value, refs *[]v1.ResourceRef, seen map[string]b
 }
 
 // extractFromString extracts template references from a single string.
+// Note: {{ .DefaultBaseImage }} is a plain string value, NOT a resource reference.
+// Only {{ .Images.<name>.<field> }} patterns are extracted as ResourceRefs.
 func extractFromString(s string, refs *[]v1.ResourceRef, seen map[string]bool) {
 	matches := templateRefPattern.FindAllStringSubmatch(s, -1)
 	for _, match := range matches {
@@ -354,8 +371,11 @@ func extractFromString(s string, refs *[]v1.ResourceRef, seen map[string]bool) {
 			kind = "network"
 		case "VMs":
 			kind = "vm"
+		case "Images":
+			kind = "image"
 		default:
-			// Skip unknown categories (e.g., Env)
+			// Skip unknown categories (e.g., Env, DefaultBaseImage)
+			// DefaultBaseImage is a plain string, not a resource reference
 			continue
 		}
 

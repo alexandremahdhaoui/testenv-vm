@@ -129,8 +129,10 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 	fixProviderPaths(testenvSpec, projectRoot)
 
 	// Create orchestrator with configuration
+	imageCacheDir := filepath.Join(tmpDir, "images")
 	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
 		StateDir:         stateDir,
+		ImageCacheDir:    imageCacheDir,
 		CleanupOnFailure: true,
 	})
 	if err != nil {

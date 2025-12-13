@@ -25,6 +25,16 @@ type TestenvSpec struct {
 	// CleanupOnFailure determines whether to clean up resources on failure.
 	// If nil, defaults to true.
 	CleanupOnFailure *bool `json:"cleanupOnFailure,omitempty" yaml:"cleanupOnFailure,omitempty"`
+	// ImageCacheDir is the directory for caching downloaded VM base images.
+	// If empty, defaults to TESTENV_VM_IMAGE_CACHE_DIR env var or /tmp/testenv-vm/images/.
+	ImageCacheDir string `json:"imageCacheDir,omitempty" yaml:"imageCacheDir,omitempty"`
+	// DefaultBaseImage is the default base image to use for VMs.
+	// Can be a well-known reference (e.g., "ubuntu:24.04") or an HTTPS URL.
+	// Accessible via {{ .DefaultBaseImage }} template variable.
+	DefaultBaseImage string `json:"defaultBaseImage,omitempty" yaml:"defaultBaseImage,omitempty"`
+	// Images defines VM base images to download and cache.
+	// Images are downloaded before any other resources (Phase 0).
+	Images []ImageResource `json:"images,omitempty" yaml:"images,omitempty"`
 	// Providers defines the available providers for resource provisioning.
 	Providers []ProviderConfig `json:"providers" yaml:"providers"`
 	// DefaultProvider is the name of the default provider to use when not specified.
@@ -49,6 +59,28 @@ type ProviderConfig struct {
 	Default bool `json:"default,omitempty" yaml:"default,omitempty"`
 	// Spec contains provider-specific configuration passed during initialization.
 	Spec map[string]any `json:"spec,omitempty" yaml:"spec,omitempty"`
+}
+
+// ImageResource defines a VM base image resource.
+// Images are downloaded and cached by the orchestrator (not by providers).
+type ImageResource struct {
+	// Name is the unique identifier for this image.
+	Name string `json:"name" yaml:"name"`
+	// Spec contains image-specific configuration.
+	Spec ImageSpec `json:"spec" yaml:"spec"`
+}
+
+// ImageSpec contains image-specific configuration.
+type ImageSpec struct {
+	// Source is the image source: either a well-known reference (e.g., "ubuntu:24.04")
+	// or an HTTPS URL to a cloud image file.
+	Source string `json:"source" yaml:"source"`
+	// SHA256 is the expected SHA256 checksum of the image file.
+	// Required for custom HTTPS URLs; optional for well-known images.
+	SHA256 string `json:"sha256,omitempty" yaml:"sha256,omitempty"`
+	// Alias is an optional alternative name for template references.
+	// If set, the image can be accessed via {{ .Images.<alias>.Path }}.
+	Alias string `json:"alias,omitempty" yaml:"alias,omitempty"`
 }
 
 // KeyResource defines an SSH key resource.

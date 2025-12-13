@@ -29,6 +29,7 @@ func createTestOrchestrator(t *testing.T) *orchestrator.Orchestrator {
 	tmpDir := t.TempDir()
 	orch, err := orchestrator.NewOrchestrator(orchestrator.Config{
 		StateDir:         filepath.Join(tmpDir, "state"),
+		ImageCacheDir:    filepath.Join(tmpDir, "images"),
 		CleanupOnFailure: true,
 	})
 	if err != nil {

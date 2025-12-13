@@ -60,6 +60,16 @@ func NewDAG() *DAG {
 func BuildDAG(testenvSpec *v1.TestenvSpec) (*DAG, error) {
 	dag := NewDAG()
 
+	// Add image nodes first (Phase 0 - no dependencies)
+	// Images are downloaded before any other resources.
+	for _, image := range testenvSpec.Images {
+		ref := v1.ResourceRef{
+			Kind: "image",
+			Name: image.Name,
+		}
+		dag.AddNode(ref)
+	}
+
 	// Add all resources as nodes
 	for _, key := range testenvSpec.Keys {
 		ref := v1.ResourceRef{

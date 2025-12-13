@@ -26,12 +26,19 @@ import (
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
 )
 
-func TestNewOrchestrator(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{
-		StateDir:         stateDir,
+// newTestConfig creates a Config with temporary directories for testing.
+func newTestConfig(t *testing.T) Config {
+	t.Helper()
+	tmpDir := t.TempDir()
+	return Config{
+		StateDir:         filepath.Join(tmpDir, "state"),
+		ImageCacheDir:    filepath.Join(tmpDir, "images"),
 		CleanupOnFailure: true,
 	}
+}
+
+func TestNewOrchestrator(t *testing.T) {
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -51,8 +58,8 @@ func TestNewOrchestrator(t *testing.T) {
 	if orchestrator.executor == nil {
 		t.Error("executor is nil")
 	}
-	if orchestrator.config.StateDir != stateDir {
-		t.Errorf("config.StateDir = %s, want %s", orchestrator.config.StateDir, stateDir)
+	if orchestrator.config.StateDir != config.StateDir {
+		t.Errorf("config.StateDir = %s, want %s", orchestrator.config.StateDir, config.StateDir)
 	}
 	if !orchestrator.config.CleanupOnFailure {
 		t.Error("config.CleanupOnFailure should be true")
@@ -60,7 +67,11 @@ func TestNewOrchestrator(t *testing.T) {
 }
 
 func TestNewOrchestrator_EmptyConfig(t *testing.T) {
-	config := Config{}
+	// Even with empty config, provide ImageCacheDir since /tmp/testenv-vm may not work
+	tmpDir := t.TempDir()
+	config := Config{
+		ImageCacheDir: filepath.Join(tmpDir, "images"),
+	}
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -72,8 +83,7 @@ func TestNewOrchestrator_EmptyConfig(t *testing.T) {
 }
 
 func TestOrchestrator_Close(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -87,8 +97,7 @@ func TestOrchestrator_Close(t *testing.T) {
 }
 
 func TestOrchestrator_Create_InvalidSpec(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -111,8 +120,7 @@ func TestOrchestrator_Create_InvalidSpec(t *testing.T) {
 }
 
 func TestOrchestrator_Create_InvalidSpecMap(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -137,8 +145,7 @@ func TestOrchestrator_Create_InvalidSpecMap(t *testing.T) {
 }
 
 func TestOrchestrator_Create_EmptySpec(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -165,8 +172,7 @@ func TestOrchestrator_Create_EmptySpec(t *testing.T) {
 }
 
 func TestOrchestrator_Delete_NonExistentState(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -187,8 +193,7 @@ func TestOrchestrator_Delete_NonExistentState(t *testing.T) {
 }
 
 func TestOrchestrator_Delete_ExistingState(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -198,7 +203,7 @@ func TestOrchestrator_Delete_ExistingState(t *testing.T) {
 
 	// Manually create a state file to simulate an existing environment
 	// (bypassing Create which requires a working provider)
-	stateSubDir := filepath.Join(stateDir, "state")
+	stateSubDir := filepath.Join(config.StateDir, "state")
 	if err := os.MkdirAll(stateSubDir, 0755); err != nil {
 		t.Fatalf("failed to create state dir: %v", err)
 	}
@@ -237,8 +242,7 @@ func TestOrchestrator_Delete_ExistingState(t *testing.T) {
 }
 
 func TestOrchestrator_Delete_RemovesArtifactDir(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -248,7 +252,7 @@ func TestOrchestrator_Delete_RemovesArtifactDir(t *testing.T) {
 
 	// Manually create state and artifact directory
 	// (bypassing Create which requires a working provider)
-	stateSubDir := filepath.Join(stateDir, "state")
+	stateSubDir := filepath.Join(config.StateDir, "state")
 	if err := os.MkdirAll(stateSubDir, 0755); err != nil {
 		t.Fatalf("failed to create state dir: %v", err)
 	}
@@ -443,8 +447,7 @@ func TestIsNotFoundError(t *testing.T) {
 }
 
 func TestOrchestrator_buildArtifact_Empty(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -479,8 +482,7 @@ func TestOrchestrator_buildArtifact_Empty(t *testing.T) {
 }
 
 func TestOrchestrator_buildArtifact_WithResources(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -566,8 +568,7 @@ func TestOrchestrator_buildArtifact_WithResources(t *testing.T) {
 }
 
 func TestOrchestrator_buildArtifact_NilResourceState(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -599,8 +600,7 @@ func TestOrchestrator_buildArtifact_NilResourceState(t *testing.T) {
 }
 
 func TestOrchestrator_Create_ValidationFailure(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -633,8 +633,7 @@ func TestOrchestrator_Create_ValidationFailure(t *testing.T) {
 }
 
 func TestOrchestrator_Create_ProviderStartFailure(t *testing.T) {
-	stateDir := t.TempDir()
-	config := Config{StateDir: stateDir}
+	config := newTestConfig(t)
 
 	orchestrator, err := NewOrchestrator(config)
 	if err != nil {
@@ -665,9 +664,10 @@ func TestOrchestrator_Create_ProviderStartFailure(t *testing.T) {
 }
 
 func TestOrchestrator_CleanupOnFailure_Disabled(t *testing.T) {
-	stateDir := t.TempDir()
+	tmpDir := t.TempDir()
 	config := Config{
-		StateDir:         stateDir,
+		StateDir:         filepath.Join(tmpDir, "state"),
+		ImageCacheDir:    filepath.Join(tmpDir, "images"),
 		CleanupOnFailure: false,
 	}
 
@@ -682,47 +682,78 @@ func TestOrchestrator_CleanupOnFailure_Disabled(t *testing.T) {
 }
 
 func TestOrchestrator_Config(t *testing.T) {
+	// Each test case provides a function to create a config with a unique temp dir
 	tests := []struct {
-		name   string
-		config Config
+		name             string
+		makeConfig       func(tmpDir string) Config
+		wantStateDir     string // expected state dir relative to tmpDir, "" means use value from tmpDir
+		wantCleanup      bool
 	}{
 		{
-			name:   "empty config",
-			config: Config{},
+			name: "empty state and cleanup disabled",
+			makeConfig: func(tmpDir string) Config {
+				return Config{
+					StateDir:         "",
+					ImageCacheDir:    filepath.Join(tmpDir, "images"),
+					CleanupOnFailure: false,
+				}
+			},
+			wantStateDir: "",
+			wantCleanup:  false,
 		},
 		{
 			name: "with state dir",
-			config: Config{
-				StateDir: "/tmp/test-state",
+			makeConfig: func(tmpDir string) Config {
+				return Config{
+					StateDir:      filepath.Join(tmpDir, "state"),
+					ImageCacheDir: filepath.Join(tmpDir, "images"),
+				}
 			},
+			wantStateDir: "state",
+			wantCleanup:  false,
 		},
 		{
 			name: "with cleanup enabled",
-			config: Config{
-				StateDir:         "/tmp/test-state",
-				CleanupOnFailure: true,
+			makeConfig: func(tmpDir string) Config {
+				return Config{
+					StateDir:         filepath.Join(tmpDir, "state"),
+					ImageCacheDir:    filepath.Join(tmpDir, "images"),
+					CleanupOnFailure: true,
+				}
 			},
+			wantStateDir: "state",
+			wantCleanup:  true,
 		},
 		{
 			name: "with cleanup disabled",
-			config: Config{
-				StateDir:         "/tmp/test-state",
-				CleanupOnFailure: false,
+			makeConfig: func(tmpDir string) Config {
+				return Config{
+					StateDir:         filepath.Join(tmpDir, "state"),
+					ImageCacheDir:    filepath.Join(tmpDir, "images"),
+					CleanupOnFailure: false,
+				}
 			},
+			wantStateDir: "state",
+			wantCleanup:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			orch, err := NewOrchestrator(tt.config)
+			tmpDir := t.TempDir()
+			config := tt.makeConfig(tmpDir)
+			orch, err := NewOrchestrator(config)
 			if err != nil {
 				t.Fatalf("NewOrchestrator() error = %v", err)
 			}
-			if orch.config.StateDir != tt.config.StateDir {
-				t.Errorf("StateDir = %s, want %s", orch.config.StateDir, tt.config.StateDir)
+			defer orch.Close()
+
+			expectedStateDir := config.StateDir
+			if orch.config.StateDir != expectedStateDir {
+				t.Errorf("StateDir = %s, want %s", orch.config.StateDir, expectedStateDir)
 			}
-			if orch.config.CleanupOnFailure != tt.config.CleanupOnFailure {
-				t.Errorf("CleanupOnFailure = %v, want %v", orch.config.CleanupOnFailure, tt.config.CleanupOnFailure)
+			if orch.config.CleanupOnFailure != tt.wantCleanup {
+				t.Errorf("CleanupOnFailure = %v, want %v", orch.config.CleanupOnFailure, tt.wantCleanup)
 			}
 		})
 	}
