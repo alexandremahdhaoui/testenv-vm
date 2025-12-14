@@ -23,7 +23,7 @@ import (
 func (p *Provider) Capabilities() *providerv1.CapabilitiesResponse {
 	return &providerv1.CapabilitiesResponse{
 		ProviderName: "libvirt",
-		Version:      "1.0.0",
+		Version:      p.Version(),
 		Resources: []providerv1.ResourceCapability{
 			{
 				Kind:       "key",

@@ -31,6 +31,7 @@ type Provider struct {
 	keys     map[string]*providerv1.KeyState
 	networks map[string]*providerv1.NetworkState
 	vms      map[string]*providerv1.VMState
+	version  string
 }
 
 // NewProvider creates a new stub provider with initialized maps.
@@ -42,11 +43,24 @@ func NewProvider() *Provider {
 	}
 }
 
+// SetVersion sets the provider version for capabilities reporting.
+func (p *Provider) SetVersion(version string) {
+	p.version = version
+}
+
+// Version returns the provider version.
+func (p *Provider) Version() string {
+	if p.version == "" {
+		return "dev"
+	}
+	return p.version
+}
+
 // Capabilities returns the capabilities of the stub provider.
 func (p *Provider) Capabilities() *providerv1.CapabilitiesResponse {
 	return &providerv1.CapabilitiesResponse{
 		ProviderName: "stub",
-		Version:      "1.0.0",
+		Version:      p.Version(),
 		Resources: []providerv1.ResourceCapability{
 			{Kind: "key", Operations: []string{"create", "get", "list", "delete"}},
 			{Kind: "network", Operations: []string{"create", "get", "list", "delete"}},

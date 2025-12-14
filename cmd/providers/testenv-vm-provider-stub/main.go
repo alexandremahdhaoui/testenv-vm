@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -33,10 +34,20 @@ import (
 
 // Version information (set via ldflags during build)
 var (
-	Version        = "dev"
+	Version        = ""
 	CommitSHA      = "unknown"
 	BuildTimestamp = "unknown"
 )
+
+func init() {
+	if Version == "" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+			Version = info.Main.Version
+		} else {
+			Version = "dev"
+		}
+	}
+}
 
 func main() {
 	mcpFlag := flag.Bool("mcp", false, "Run as MCP server")
@@ -62,6 +73,7 @@ func main() {
 // runMCPServer starts the stub provider MCP server with stdio transport.
 func runMCPServer() error {
 	provider := stub.NewProvider()
+	provider.SetVersion(Version)
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "testenv-vm-provider-stub",

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/debug"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -32,10 +33,20 @@ import (
 
 // Version information (set via ldflags during build)
 var (
-	Version        = "dev"
+	Version        = ""
 	CommitSHA      = "unknown"
 	BuildTimestamp = "unknown"
 )
+
+func init() {
+	if Version == "" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+			Version = info.Main.Version
+		} else {
+			Version = "dev"
+		}
+	}
+}
 
 func main() {
 	mcpFlag := flag.Bool("mcp", false, "Run as MCP server")
@@ -64,6 +75,7 @@ func runMCPServer() error {
 	if err != nil {
 		return fmt.Errorf("failed to create provider: %w", err)
 	}
+	provider.SetVersion(Version)
 	defer func() {
 		_ = provider.Close()
 	}()

@@ -51,6 +51,7 @@ type Provider struct {
 	keys     map[string]*providerv1.KeyState
 	networks map[string]*providerv1.NetworkState
 	vms      map[string]*providerv1.VMState
+	version  string
 }
 
 // NewProvider creates a new libvirt provider with the given configuration.
@@ -118,6 +119,19 @@ func (p *Provider) Close() error {
 		return p.conn.Disconnect()
 	}
 	return nil
+}
+
+// SetVersion sets the provider version for capabilities reporting.
+func (p *Provider) SetVersion(version string) {
+	p.version = version
+}
+
+// Version returns the provider version.
+func (p *Provider) Version() string {
+	if p.version == "" {
+		return "dev"
+	}
+	return p.version
 }
 
 // loadConfig loads provider configuration from environment variables.

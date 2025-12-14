@@ -60,8 +60,8 @@ func TestCapabilities(t *testing.T) {
 	if caps.ProviderName != "stub" {
 		t.Errorf("expected ProviderName 'stub', got %q", caps.ProviderName)
 	}
-	if caps.Version != "1.0.0" {
-		t.Errorf("expected Version '1.0.0', got %q", caps.Version)
+	if caps.Version != "dev" {
+		t.Errorf("expected Version 'dev', got %q", caps.Version)
 	}
 	if len(caps.Resources) != 3 {
 		t.Errorf("expected 3 resource capabilities, got %d", len(caps.Resources))
