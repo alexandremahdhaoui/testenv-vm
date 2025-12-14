@@ -20,6 +20,7 @@ package provider
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 
@@ -251,14 +252,28 @@ func TestResolveEngine(t *testing.T) {
 		}
 	})
 
-	t.Run("go:// prefix without local enabled", func(t *testing.T) {
+	t.Run("go:// internal path without local enabled returns error", func(t *testing.T) {
 		// Ensure FORGE_RUN_LOCAL_ENABLED is not set
 		os.Unsetenv(EnvRunLocalEnabled)
 
-		// This should fail because there's no pre-built binary
+		// Internal path should fail without FORGE_RUN_LOCAL_ENABLED
 		_, err := resolveEngine("go://cmd/nonexistent/provider")
 		if err == nil {
-			t.Error("expected error for go:// without local enabled and no binary")
+			t.Error("expected error for internal go:// without local enabled")
+		}
+	})
+
+	t.Run("go:// external path without local enabled succeeds", func(t *testing.T) {
+		// Ensure FORGE_RUN_LOCAL_ENABLED is not set
+		os.Unsetenv(EnvRunLocalEnabled)
+
+		// External path should work without FORGE_RUN_LOCAL_ENABLED
+		cmd, err := resolveEngine("go://github.com/user/repo/cmd/tool@v1.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error for external go://: %v", err)
+		}
+		if cmd == nil {
+			t.Fatal("expected non-nil command for external module")
 		}
 	})
 
@@ -380,20 +395,173 @@ func TestManagerStartDuplicateProvider(t *testing.T) {
 
 // TestResolveGoEngine tests the Go engine resolution specifically.
 func TestResolveGoEngine(t *testing.T) {
-	t.Run("extracts binary name from package path", func(t *testing.T) {
+	t.Run("external module with version", func(t *testing.T) {
+		// External modules should work regardless of FORGE_RUN_LOCAL_ENABLED
 		os.Unsetenv(EnvRunLocalEnabled)
 
-		// This should look for a binary named "test-provider"
-		_, err := resolveGoEngine("go://cmd/providers/test-provider")
-		if err == nil {
-			// It's expected to fail since the binary doesn't exist
-			t.Log("Expected error since binary doesn't exist")
+		cmd, err := resolveGoEngine("go://github.com/user/repo/cmd/tool@v1.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		// The error message should mention the binary name
-		if err != nil && !containsSubstring(err.Error(), "test-provider") {
-			t.Errorf("error should mention binary name: %v", err)
+
+		expectedArgs := []string{"go", "run", "github.com/user/repo/cmd/tool@v1.0.0", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v", cmd.Args, expectedArgs)
 		}
 	})
+
+	t.Run("external module without version defaults to latest", func(t *testing.T) {
+		os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://github.com/user/repo/cmd/tool")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedArgs := []string{"go", "run", "github.com/user/repo/cmd/tool@latest", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v", cmd.Args, expectedArgs)
+		}
+	})
+
+	t.Run("external module with FORGE_RUN_LOCAL_ENABLED still uses full path", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://github.com/user/repo/cmd/tool@v1.0.0")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// External modules should NOT have ./ prefix
+		expectedArgs := []string{"go", "run", "github.com/user/repo/cmd/tool@v1.0.0", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v", cmd.Args, expectedArgs)
+		}
+	})
+
+	t.Run("internal module with FORGE_RUN_LOCAL_ENABLED", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://cmd/providers/stub")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedArgs := []string{"go", "run", "./cmd/providers/stub", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v", cmd.Args, expectedArgs)
+		}
+	})
+
+	t.Run("internal module without FORGE_RUN_LOCAL_ENABLED returns error", func(t *testing.T) {
+		os.Unsetenv(EnvRunLocalEnabled)
+
+		_, err := resolveGoEngine("go://cmd/providers/stub")
+		if err == nil {
+			t.Error("expected error for internal module without FORGE_RUN_LOCAL_ENABLED")
+		}
+		// Error message should be helpful
+		if !strings.Contains(err.Error(), EnvRunLocalEnabled) {
+			t.Errorf("error should mention %s: %v", EnvRunLocalEnabled, err)
+		}
+	})
+
+	t.Run("short name without FORGE_RUN_LOCAL_ENABLED returns error", func(t *testing.T) {
+		os.Unsetenv(EnvRunLocalEnabled)
+
+		_, err := resolveGoEngine("go://tool-name")
+		if err == nil {
+			t.Error("expected error for short name without FORGE_RUN_LOCAL_ENABLED")
+		}
+	})
+
+	t.Run("short name with FORGE_RUN_LOCAL_ENABLED", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://tool-name")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		expectedArgs := []string{"go", "run", "./tool-name", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v", cmd.Args, expectedArgs)
+		}
+	})
+
+	// IMPORTANT FIX (Issue 1.2): Test path normalization to avoid ././path
+	t.Run("internal module with existing ./ prefix", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://./cmd/providers/stub")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should NOT produce ././cmd/providers/stub
+		expectedArgs := []string{"go", "run", "./cmd/providers/stub", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v (should not have double ./)", cmd.Args, expectedArgs)
+		}
+	})
+
+	t.Run("internal module with existing ../ prefix", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		cmd, err := resolveGoEngine("go://../other/cmd/tool")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Should preserve ../ prefix without adding ./
+		expectedArgs := []string{"go", "run", "../other/cmd/tool", "--mcp"}
+		if !argsEqual(cmd.Args, expectedArgs) {
+			t.Errorf("args = %v, want %v (should not add ./ to ../)", cmd.Args, expectedArgs)
+		}
+	})
+
+	// IMPORTANT FIX (Issue 1.3): Test version on internal modules errors
+	t.Run("internal module with version returns error", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		_, err := resolveGoEngine("go://cmd/providers/stub@v1.0.0")
+		if err == nil {
+			t.Error("expected error for internal module with version specifier")
+		}
+		// Error message should mention the version
+		if !strings.Contains(err.Error(), "@v1.0.0") {
+			t.Errorf("error should mention the version specifier: %v", err)
+		}
+	})
+
+	t.Run("local path with version returns error", func(t *testing.T) {
+		os.Setenv(EnvRunLocalEnabled, "true")
+		defer os.Unsetenv(EnvRunLocalEnabled)
+
+		_, err := resolveGoEngine("go://./cmd/providers/stub@v1.0.0")
+		if err == nil {
+			t.Error("expected error for local path with version specifier")
+		}
+	})
+}
+
+// argsEqual compares two string slices for equality.
+func argsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestResolveBinaryEngine tests the binary engine resolution.
@@ -411,4 +579,151 @@ func TestResolveBinaryEngine(t *testing.T) {
 			t.Error("expected error for non-existent relative path")
 		}
 	})
+}
+
+// TestStripVersion tests the stripVersion helper function.
+func TestStripVersion(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		expectedPath    string
+		expectedVersion string
+	}{
+		{
+			name:            "external module with version",
+			input:           "github.com/user/repo/cmd/tool@v1.2.3",
+			expectedPath:    "github.com/user/repo/cmd/tool",
+			expectedVersion: "@v1.2.3",
+		},
+		{
+			name:            "external module without version",
+			input:           "github.com/user/repo/cmd/tool",
+			expectedPath:    "github.com/user/repo/cmd/tool",
+			expectedVersion: "",
+		},
+		{
+			name:            "internal path without version",
+			input:           "cmd/providers/stub",
+			expectedPath:    "cmd/providers/stub",
+			expectedVersion: "",
+		},
+		{
+			name:            "version with latest",
+			input:           "github.com/user/repo@latest",
+			expectedPath:    "github.com/user/repo",
+			expectedVersion: "@latest",
+		},
+		{
+			name:            "version with dirty suffix",
+			input:           "github.com/user/repo@v1.0.0-dirty",
+			expectedPath:    "github.com/user/repo",
+			expectedVersion: "@v1.0.0-dirty",
+		},
+		{
+			name:            "empty string",
+			input:           "",
+			expectedPath:    "",
+			expectedVersion: "",
+		},
+		// IMPORTANT FIX (Issue 4.2): Test malformed inputs
+		{
+			name:            "double @ symbol (malformed)",
+			input:           "github.com/user/repo@v1.0.0@v2.0.0",
+			expectedPath:    "github.com/user/repo",
+			expectedVersion: "@v1.0.0@v2.0.0", // Takes everything after first @
+		},
+		{
+			name:            "@ at start (malformed)",
+			input:           "@v1.0.0",
+			expectedPath:    "",
+			expectedVersion: "@v1.0.0",
+		},
+		{
+			name:            "only @ symbol",
+			input:           "@",
+			expectedPath:    "",
+			expectedVersion: "@",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, version := stripVersion(tt.input)
+			if path != tt.expectedPath {
+				t.Errorf("path: got %q, want %q", path, tt.expectedPath)
+			}
+			if version != tt.expectedVersion {
+				t.Errorf("version: got %q, want %q", version, tt.expectedVersion)
+			}
+		})
+	}
+}
+
+// TestIsExternalModule tests the isExternalModule helper function.
+func TestIsExternalModule(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		{
+			name:     "github.com path",
+			input:    "github.com/user/repo/cmd/tool",
+			expected: true,
+		},
+		{
+			name:     "gitlab.com path",
+			input:    "gitlab.com/user/repo/cmd/tool",
+			expected: true,
+		},
+		{
+			name:     "custom domain path",
+			input:    "my.company.com/project/cmd/tool",
+			expected: true,
+		},
+		{
+			name:     "internal cmd path",
+			input:    "cmd/providers/stub",
+			expected: false,
+		},
+		{
+			name:     "internal pkg path",
+			input:    "pkg/provider/manager",
+			expected: false,
+		},
+		{
+			name:     "local path with ./",
+			input:    "./cmd/providers/stub",
+			expected: false,
+		},
+		{
+			name:     "local path with ../",
+			input:    "../other/cmd/tool",
+			expected: false,
+		},
+		{
+			name:     "short name without slash",
+			input:    "tool-name",
+			expected: false,
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: false,
+		},
+		{
+			name:     "golang.org path",
+			input:    "golang.org/x/tools/cmd/stringer",
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isExternalModule(tt.input)
+			if result != tt.expected {
+				t.Errorf("isExternalModule(%q) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
 }

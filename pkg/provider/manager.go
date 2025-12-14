@@ -225,7 +225,8 @@ func (m *Manager) List() []string {
 
 // resolveEngine resolves an engine specification to an exec.Cmd.
 // Supported formats:
-//   - go://path/to/package - Go package path (requires FORGE_RUN_LOCAL_ENABLED=true or pre-built binary)
+//   - go://github.com/user/repo/cmd/tool@version - External Go module (always uses go run, defaults to @latest if no version)
+//   - go://path/to/package - Local Go package (requires FORGE_RUN_LOCAL_ENABLED=true, no version specifier allowed)
 //   - /path/to/binary - Absolute path to binary
 //   - ./relative/path - Relative path to binary
 func resolveEngine(engine string) (*exec.Cmd, error) {
@@ -238,42 +239,86 @@ func resolveEngine(engine string) (*exec.Cmd, error) {
 }
 
 // resolveGoEngine resolves a go:// engine specification.
+// CRITICAL: go:// ALWAYS means "go run" - never binary lookup.
+//
+// For external modules (e.g., go://github.com/user/repo/cmd/tool@v1.0.0):
+//   - Uses "go run <fullpath>@<version> --mcp"
+//   - Defaults to @latest if no version specified
+//
+// For internal/local modules (e.g., go://cmd/providers/stub):
+//   - Requires FORGE_RUN_LOCAL_ENABLED=true
+//   - Uses "go run ./<path> --mcp"
+//   - Version specifiers on internal modules are NOT supported and will error
 func resolveGoEngine(engine string) (*exec.Cmd, error) {
 	// Extract package path from go://path/to/package
 	pkgPath := strings.TrimPrefix(engine, "go://")
 
-	// Check if local execution is enabled
+	// Extract version if present
+	pkgPath, version := stripVersion(pkgPath)
+
+	// External module: always use go run with full path
+	if isExternalModule(pkgPath) {
+		var fullPath string
+		if version != "" {
+			fullPath = pkgPath + version
+		} else {
+			fullPath = pkgPath + "@latest"
+		}
+		return exec.Command("go", "run", fullPath, "--mcp"), nil
+	}
+
+	// Internal/local module: version specifiers are not supported
+	if version != "" {
+		return nil, fmt.Errorf("go engine %q: version specifiers are not supported for internal packages; remove %s or use full external path", engine, version)
+	}
+
+	// Internal/local module: requires FORGE_RUN_LOCAL_ENABLED
 	if os.Getenv(EnvRunLocalEnabled) == "true" {
-		// Use "go run" to execute the package
-		cmd := exec.Command("go", "run", "./"+pkgPath, "--mcp")
-		return cmd, nil
-	}
-
-	// Look for pre-built binary
-	// Convention: binary name is the last component of the package path
-	parts := strings.Split(pkgPath, "/")
-	binaryName := parts[len(parts)-1]
-
-	// Check common binary locations
-	binaryPaths := []string{
-		"./build/bin/" + binaryName,
-		"./" + binaryName,
-		binaryName, // Will be looked up in PATH
-	}
-
-	for _, binPath := range binaryPaths {
-		if _, err := exec.LookPath(binPath); err == nil {
-			cmd := exec.Command(binPath, "--mcp")
-			return cmd, nil
+		// Normalize path: avoid double "./" prefix
+		localPath := pkgPath
+		if !strings.HasPrefix(localPath, "./") && !strings.HasPrefix(localPath, "../") {
+			localPath = "./" + localPath
 		}
-		// Also check if file exists directly (for relative paths)
-		if _, err := os.Stat(binPath); err == nil {
-			cmd := exec.Command(binPath, "--mcp")
-			return cmd, nil
-		}
+		return exec.Command("go", "run", localPath, "--mcp"), nil
 	}
 
-	return nil, fmt.Errorf("go engine %q: set %s=true to use 'go run' or ensure binary %q is built", engine, EnvRunLocalEnabled, binaryName)
+	return nil, fmt.Errorf("go engine %q: internal package requires %s=true or use full external path (e.g., go://github.com/user/repo/cmd/tool@version)",
+		engine, EnvRunLocalEnabled)
+}
+
+// stripVersion extracts the version suffix from a package path.
+// Returns the path without version and the version string (including @).
+// Example: "github.com/user/repo@v1.0.0" -> ("github.com/user/repo", "@v1.0.0")
+func stripVersion(pkgPath string) (path, version string) {
+	if idx := strings.Index(pkgPath, "@"); idx != -1 {
+		return pkgPath[:idx], pkgPath[idx:]
+	}
+	return pkgPath, ""
+}
+
+// isExternalModule determines if a package path refers to an external module.
+// External modules have a domain-like first segment (contains a dot).
+// Examples:
+//   - "github.com/user/repo/cmd/tool" -> true (external)
+//   - "cmd/providers/stub" -> false (internal)
+//   - "./cmd/providers/stub" -> false (local path)
+//   - "tool-name" -> false (short name)
+func isExternalModule(path string) bool {
+	if path == "" {
+		return false
+	}
+	// Local paths are not external
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+		return false
+	}
+	// Short names without "/" are internal
+	if !strings.Contains(path, "/") {
+		return false
+	}
+	// Check if first segment contains "." (domain indicator)
+	firstSlash := strings.Index(path, "/")
+	firstSegment := path[:firstSlash]
+	return strings.Contains(firstSegment, ".")
 }
 
 // resolveBinaryEngine resolves a binary path engine specification.
