@@ -17,6 +17,7 @@ testenv-vm solves the infrastructure testing gap for systems requiring actual VM
 - [How does dependency resolution work?](#how-does-dependency-resolution-work)
 - [What happens if VM creation fails?](#what-happens-if-vm-creation-fails)
 - [How do I test PXE boot scenarios?](#how-do-i-test-pxe-boot-scenarios)
+- [How do I create VMs at runtime?](#how-do-i-create-vms-at-runtime)
 - [Can I use multiple providers in one environment?](#can-i-use-multiple-providers-in-one-environment)
 - [Why a provider-based architecture instead of direct implementation?](#why-a-provider-based-architecture-instead-of-direct-implementation)
 - [Why MCP for provider communication?](#why-mcp-for-provider-communication)
@@ -102,6 +103,32 @@ vms:
       boot: { order: [network, hd], firmware: bios }
 ```
 
+## How do I create VMs at runtime?
+
+Use the `RuntimeProvisioner` returned from `Orchestrator.Create()` to create VMs during test execution:
+
+```go
+result, _ := orchestrator.Create(ctx, input)
+client, _ := client.NewClient(result.Provisioner, "control-plane",
+    client.WithProvisioner(result.Provisioner))
+
+worker, _ := client.CreateVM(ctx, "worker-1", v1.VMSpec{
+    Memory:  2048,
+    VCPUs:   2,
+    Network: "test-net",
+    Disk:    v1.DiskSpec{Size: "10G"},
+    CloudInit: &v1.CloudInitSpec{
+        Users: []v1.UserSpec{{
+            Name:              "ubuntu",
+            SSHAuthorizedKeys: []string{"{{ .Keys.vm-ssh.PublicKey }}"},
+        }},
+    },
+})
+worker.WaitReady(ctx, 2*time.Minute)
+```
+
+Runtime VMs integrate with existing resources via templates and are automatically cleaned up. See [Runtime VM Creation](./docs/runtime-vm-creation.md) for details.
+
 ## Can I use multiple providers in one environment?
 
 Yes. Each resource specifies its provider. You might use libvirt for local VMs and AWS for cloud resources in the same test environment.
@@ -149,6 +176,8 @@ forge test e2e
 ## Documentation
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - System design and component diagrams
+- [Runtime VM Creation](./docs/runtime-vm-creation.md) - Creating VMs dynamically during tests
+- [Libvirt Provider](./docs/libvirt-provider.md) - Libvirt provider configuration
 - [Provider Interface](./api/provider/v1/) - Provider MCP tool specifications
 - [Examples](./examples/) - Sample configurations for common scenarios
 

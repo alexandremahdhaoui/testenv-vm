@@ -40,19 +40,20 @@ func (s *Server) handleCreate(ctx context.Context, input engineframework.CreateI
 	}
 
 	// Call the orchestrator
-	artifact, err := s.orch.Create(ctx, v1Input)
+	createResult, err := s.orch.Create(ctx, v1Input)
 	if err != nil {
 		log.Printf("Create failed: %v", err)
 		return nil, err
 	}
 
 	// Convert v1.TestEnvArtifact to engineframework.TestEnvArtifact
+	// Note: Provisioner is not returned in MCP response (not JSON-serializable)
 	result := &engineframework.TestEnvArtifact{
-		TestID:           artifact.TestID,
-		Files:            normalizeFilesMap(artifact.Files),
-		Metadata:         normalizeMetadataMap(artifact.Metadata),
-		ManagedResources: artifact.ManagedResources,
-		Env:              normalizeEnvMap(artifact.Env),
+		TestID:           createResult.Artifact.TestID,
+		Files:            normalizeFilesMap(createResult.Artifact.Files),
+		Metadata:         normalizeMetadataMap(createResult.Artifact.Metadata),
+		ManagedResources: createResult.Artifact.ManagedResources,
+		Env:              normalizeEnvMap(createResult.Artifact.Env),
 	}
 
 	log.Printf("Create succeeded: testID=%s", input.TestID)

@@ -227,10 +227,11 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 	}
 
 	t.Log("Creating test environment...")
-	artifact, err := orch.Create(ctx, input)
+	result, err := orch.Create(ctx, input)
 	if err != nil {
 		t.Fatalf("failed to create test environment: %v", err)
 	}
+	artifact := result.Artifact
 
 	// Store for cleanup test
 	envStateFile := filepath.Join(tmpDir, "env_state.yaml")

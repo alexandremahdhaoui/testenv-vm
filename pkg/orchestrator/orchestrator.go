@@ -25,6 +25,7 @@ import (
 	"time"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/client"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
@@ -48,6 +49,17 @@ type Orchestrator struct {
 	manager  *provider.Manager
 	store    *state.Store
 	executor *Executor
+}
+
+// CreateResult contains the results of Orchestrator.Create.
+// Provisioner is returned directly because it cannot be serialized
+// (contains goroutines, mutex, and file handles).
+type CreateResult struct {
+	// Artifact is the serializable test environment artifact.
+	Artifact *v1.TestEnvArtifact
+	// Provisioner enables runtime VM creation during tests.
+	// It is nil if the test does not need runtime provisioning.
+	Provisioner *client.RuntimeProvisioner
 }
 
 // NewOrchestrator creates a new Orchestrator with the given configuration.
@@ -85,7 +97,9 @@ func NewOrchestrator(config Config) (*Orchestrator, error) {
 }
 
 // Create creates a new test environment from the given input.
-func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*v1.TestEnvArtifact, error) {
+// Returns CreateResult containing the artifact and a RuntimeProvisioner
+// for runtime VM creation during tests.
+func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*CreateResult, error) {
 	log.Printf("Creating test environment: testID=%s, stage=%s", input.TestID, input.Stage)
 
 	// 1. Parse spec from input.Spec using spec.ParseFromMap
@@ -198,11 +212,26 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*v1.T
 		return nil, fmt.Errorf("failed to save ready state: %w", err)
 	}
 
-	// 13. Build and return TestEnvArtifact
+	// 13. Build TestEnvArtifact
 	artifact := o.buildArtifact(input.TestID, envState)
 
+	// 14. Create RuntimeProvisioner for runtime VM creation
+	provisioner, err := client.NewRuntimeProvisioner(client.RuntimeProvisionerConfig{
+		Manager:     o.manager,
+		Store:       o.store,
+		EnvState:    envState,
+		TemplateCtx: templateCtx,
+		Spec:        testenvSpec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RuntimeProvisioner: %w", err)
+	}
+
 	log.Printf("Test environment created successfully: testID=%s", input.TestID)
-	return artifact, nil
+	return &CreateResult{
+		Artifact:    artifact,
+		Provisioner: provisioner,
+	}, nil
 }
 
 // Delete deletes a test environment.

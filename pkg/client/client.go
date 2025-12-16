@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
 )
 
 // Client provides high-level operations on a VM via SSH.
@@ -29,6 +31,7 @@ type Client struct {
 	sshRunner      SSHRunner
 	defaultExecCtx *ExecutionContext
 	cachedVMInfo   *VMInfo
+	provisioner    *RuntimeProvisioner // Optional: enables CreateVM/DeleteVM
 }
 
 // ClientOption configures the Client.
@@ -45,6 +48,13 @@ func WithSSHRunner(runner SSHRunner) ClientOption {
 func WithDefaultExecutionContext(ctx *ExecutionContext) ClientOption {
 	return func(c *Client) {
 		c.defaultExecCtx = ctx
+	}
+}
+
+// WithProvisioner sets the RuntimeProvisioner, enabling CreateVM and DeleteVM methods.
+func WithProvisioner(p *RuntimeProvisioner) ClientOption {
+	return func(c *Client) {
+		c.provisioner = p
 	}
 }
 
@@ -292,4 +302,22 @@ func (c *Client) getVMInfo() (*VMInfo, error) {
 
 	c.cachedVMInfo = vmInfo
 	return c.cachedVMInfo, nil
+}
+
+// CreateVM creates a new VM at runtime and returns a Client for it.
+// Requires the client to be created with WithProvisioner option.
+func (c *Client) CreateVM(ctx context.Context, name string, spec v1.VMSpec) (*Client, error) {
+	if c.provisioner == nil {
+		return nil, fmt.Errorf("client: CreateVM requires WithProvisioner option")
+	}
+	return c.provisioner.CreateVM(ctx, name, spec)
+}
+
+// DeleteVM deletes a runtime-created VM.
+// Requires the client to be created with WithProvisioner option.
+func (c *Client) DeleteVM(ctx context.Context, name string) error {
+	if c.provisioner == nil {
+		return fmt.Errorf("client: DeleteVM requires WithProvisioner option")
+	}
+	return c.provisioner.DeleteVM(ctx, name)
 }

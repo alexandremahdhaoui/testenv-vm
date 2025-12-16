@@ -159,7 +159,7 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 		Metadata: map[string]string{},
 	}
 
-	artifact, err := orch.Create(ctx, input)
+	result, err := orch.Create(ctx, input)
 	if err != nil {
 		// Clean up on failure
 		orch.Close()
@@ -169,7 +169,7 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 	return &TestEnv{
 		ID:       testID,
 		Spec:     testenvSpec,
-		Artifact: artifact,
+		Artifact: result.Artifact,
 		Orch:     orch,
 		TmpDir:   tmpDir,
 		StateDir: stateDir,
