@@ -24,22 +24,46 @@ import (
 )
 
 func TestGenerateMetaData(t *testing.T) {
-	vmName := "test-vm"
-	metaData := generateMetaData(vmName)
+	config := &CloudInitConfig{VMName: "test-vm"}
+	metaData := generateMetaData(config)
 
 	// Verify instance-id
 	if !strings.Contains(metaData, "instance-id: test-vm") {
 		t.Error("meta-data should contain instance-id")
 	}
 
-	// Verify hostname
+	// Verify hostname (fallback to VMName when Hostname is empty)
 	if !strings.Contains(metaData, "hostname: test-vm") {
-		t.Error("meta-data should contain hostname")
+		t.Error("meta-data should contain hostname (fallback to VMName)")
 	}
 
 	// Verify local-hostname
 	if !strings.Contains(metaData, "local-hostname: test-vm") {
 		t.Error("meta-data should contain local-hostname")
+	}
+}
+
+func TestGenerateMetaData_WithCustomHostname(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName:   "test-vm",
+		Hostname: "custom-host",
+	}
+	metaData := generateMetaData(config)
+
+	// instance-id should still use VMName
+	if !strings.Contains(metaData, "instance-id: test-vm") {
+		t.Error("meta-data should use VMName for instance-id")
+	}
+	// hostname should use custom value
+	if !strings.Contains(metaData, "hostname: custom-host") {
+		t.Error("meta-data should use custom hostname")
+	}
+	if !strings.Contains(metaData, "local-hostname: custom-host") {
+		t.Error("meta-data should use custom hostname for local-hostname")
+	}
+	// Should NOT contain VMName in hostname fields
+	if strings.Contains(metaData, "hostname: test-vm") {
+		t.Error("meta-data should not use VMName when custom hostname is set")
 	}
 }
 
@@ -68,8 +92,10 @@ func TestGenerateUserData_DefaultUser(t *testing.T) {
 
 func TestGenerateUserData_WithUsername(t *testing.T) {
 	config := &CloudInitConfig{
-		VMName:   "test-vm",
-		Username: "testuser",
+		VMName: "test-vm",
+		Users: []providerv1.UserSpec{
+			{Name: "testuser"},
+		},
 	}
 
 	userData := generateUserData(config)
@@ -81,11 +107,15 @@ func TestGenerateUserData_WithUsername(t *testing.T) {
 
 func TestGenerateUserData_WithSSHKeys(t *testing.T) {
 	config := &CloudInitConfig{
-		VMName:   "test-vm",
-		Username: "testuser",
-		SSHKeys: []string{
-			"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test@example.com",
-			"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAATest test2@example.com",
+		VMName: "test-vm",
+		Users: []providerv1.UserSpec{
+			{
+				Name: "testuser",
+				SSHAuthorizedKeys: []string{
+					"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test@example.com",
+					"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAATest test2@example.com",
+				},
+			},
 		},
 	}
 
@@ -126,10 +156,10 @@ func TestGenerateUserData_WithPackages(t *testing.T) {
 	}
 }
 
-func TestGenerateUserData_WithRunCMD(t *testing.T) {
+func TestGenerateUserData_WithRuncmd(t *testing.T) {
 	config := &CloudInitConfig{
 		VMName: "test-vm",
-		RunCMD: []string{"echo hello", "apt-get update"},
+		Runcmd: []string{"echo hello", "apt-get update"},
 	}
 
 	userData := generateUserData(config)
@@ -185,8 +215,9 @@ func TestCloudInitConfigFromVMSpec_Defaults(t *testing.T) {
 		t.Errorf("Expected VMName %s, got %s", vmName, config.VMName)
 	}
 
-	if config.Username != "ubuntu" {
-		t.Errorf("Expected default username 'ubuntu', got %s", config.Username)
+	// No default username - defaults are applied in generateUserData
+	if len(config.Users) != 0 {
+		t.Errorf("Expected empty Users, got %v", config.Users)
 	}
 
 	if len(config.MatchedKeyNames) != 0 {
@@ -198,6 +229,7 @@ func TestCloudInitConfigFromVMSpec_WithCloudInit(t *testing.T) {
 	vmName := "test-vm"
 	spec := &providerv1.VMSpec{
 		CloudInit: &providerv1.CloudInitSpec{
+			Hostname: "custom-hostname",
 			Users: []providerv1.UserSpec{
 				{
 					Name: "customuser",
@@ -206,27 +238,42 @@ func TestCloudInitConfigFromVMSpec_WithCloudInit(t *testing.T) {
 					},
 				},
 			},
-			Packages:    []string{"vim", "git"},
-			RunCommands: []string{"echo hello"},
+			Packages: []string{"vim", "git"},
+			WriteFiles: []providerv1.WriteFileSpec{
+				{Path: "/etc/test", Content: "hello", Permissions: "0644"},
+			},
+			Runcmd: []string{"echo hello"},
 		},
 	}
 
 	config := cloudInitConfigFromVMSpec(vmName, spec, nil)
 
-	if config.Username != "customuser" {
-		t.Errorf("Expected username 'customuser', got %s", config.Username)
+	if config.Hostname != "custom-hostname" {
+		t.Errorf("Expected hostname 'custom-hostname', got %s", config.Hostname)
 	}
 
-	if len(config.SSHKeys) != 1 {
-		t.Errorf("Expected 1 SSH key, got %d", len(config.SSHKeys))
+	if len(config.Users) != 1 {
+		t.Errorf("Expected 1 user, got %d", len(config.Users))
+	}
+
+	if config.Users[0].Name != "customuser" {
+		t.Errorf("Expected username 'customuser', got %s", config.Users[0].Name)
+	}
+
+	if len(config.Users[0].SSHAuthorizedKeys) != 1 {
+		t.Errorf("Expected 1 SSH key, got %d", len(config.Users[0].SSHAuthorizedKeys))
 	}
 
 	if len(config.Packages) != 2 {
 		t.Errorf("Expected 2 packages, got %d", len(config.Packages))
 	}
 
-	if len(config.RunCMD) != 1 {
-		t.Errorf("Expected 1 run command, got %d", len(config.RunCMD))
+	if len(config.WriteFiles) != 1 {
+		t.Errorf("Expected 1 WriteFile, got %d", len(config.WriteFiles))
+	}
+
+	if len(config.Runcmd) != 1 {
+		t.Errorf("Expected 1 run command, got %d", len(config.Runcmd))
 	}
 }
 
@@ -295,5 +342,192 @@ func TestCloudInitConfigFromVMSpec_NoMatchingKeys(t *testing.T) {
 
 	if len(config.MatchedKeyNames) != 0 {
 		t.Errorf("Expected 0 matched keys, got %d", len(config.MatchedKeyNames))
+	}
+}
+
+func TestCloudInitConfigFromVMSpec_MultipleUsers(t *testing.T) {
+	vmName := "test-vm"
+	spec := &providerv1.VMSpec{
+		CloudInit: &providerv1.CloudInitSpec{
+			Users: []providerv1.UserSpec{
+				{Name: "user1", SSHAuthorizedKeys: []string{"key1"}},
+				{Name: "user2", SSHAuthorizedKeys: []string{"key2", "key3"}},
+			},
+		},
+	}
+	config := cloudInitConfigFromVMSpec(vmName, spec, nil)
+	if len(config.Users) != 2 {
+		t.Errorf("Expected 2 users, got %d", len(config.Users))
+	}
+	// Verify users are not flattened
+	if config.Users[0].Name != "user1" || config.Users[1].Name != "user2" {
+		t.Error("Users should preserve individual names")
+	}
+	if len(config.Users[0].SSHAuthorizedKeys) != 1 || len(config.Users[1].SSHAuthorizedKeys) != 2 {
+		t.Error("Users should preserve individual SSH keys")
+	}
+}
+
+func TestCloudInitConfigFromVMSpec_Hostname(t *testing.T) {
+	spec := &providerv1.VMSpec{
+		CloudInit: &providerv1.CloudInitSpec{
+			Hostname: "custom-host",
+		},
+	}
+	config := cloudInitConfigFromVMSpec("vm-name", spec, nil)
+	if config.Hostname != "custom-host" {
+		t.Errorf("Expected hostname 'custom-host', got %q", config.Hostname)
+	}
+}
+
+func TestCloudInitConfigFromVMSpec_WriteFiles(t *testing.T) {
+	spec := &providerv1.VMSpec{
+		CloudInit: &providerv1.CloudInitSpec{
+			WriteFiles: []providerv1.WriteFileSpec{
+				{Path: "/etc/test", Content: "hello", Permissions: "0644"},
+			},
+		},
+	}
+	config := cloudInitConfigFromVMSpec("vm-name", spec, nil)
+	if len(config.WriteFiles) != 1 {
+		t.Errorf("Expected 1 WriteFile, got %d", len(config.WriteFiles))
+	}
+	if config.WriteFiles[0].Path != "/etc/test" {
+		t.Errorf("Expected path '/etc/test', got %q", config.WriteFiles[0].Path)
+	}
+}
+
+func TestGenerateUserData_MultipleUsers(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		Users: []providerv1.UserSpec{
+			{
+				Name:              "admin",
+				Sudo:              "ALL=(ALL) NOPASSWD:ALL",
+				Shell:             "/bin/zsh",
+				SSHAuthorizedKeys: []string{"ssh-ed25519 AAA1 admin@test"},
+			},
+			{
+				Name:              "developer",
+				Shell:             "/bin/bash",
+				SSHAuthorizedKeys: []string{"ssh-ed25519 AAA2 dev@test"},
+			},
+		},
+	}
+	userData := generateUserData(config)
+
+	// Both users should appear
+	if !strings.Contains(userData, "name: admin") {
+		t.Error("user-data should contain admin user")
+	}
+	if !strings.Contains(userData, "name: developer") {
+		t.Error("user-data should contain developer user")
+	}
+	// Shell settings should be preserved
+	if !strings.Contains(userData, "shell: /bin/zsh") {
+		t.Error("admin user should have zsh shell")
+	}
+	if !strings.Contains(userData, "shell: /bin/bash") {
+		t.Error("developer user should have bash shell")
+	}
+	// Each user's keys should appear
+	if !strings.Contains(userData, "ssh-ed25519 AAA1") {
+		t.Error("admin's SSH key should appear")
+	}
+	if !strings.Contains(userData, "ssh-ed25519 AAA2") {
+		t.Error("developer's SSH key should appear")
+	}
+}
+
+func TestGenerateUserData_CustomSudo(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		Users: []providerv1.UserSpec{
+			{Name: "limited", Sudo: "ALL=(ALL) ALL"},
+		},
+	}
+	userData := generateUserData(config)
+	if !strings.Contains(userData, "sudo: ['ALL=(ALL) ALL']") {
+		t.Error("user-data should use custom sudo rule")
+	}
+}
+
+func TestGenerateUserData_WithWriteFiles(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		WriteFiles: []providerv1.WriteFileSpec{
+			{
+				Path:        "/etc/motd",
+				Content:     "Welcome to the VM!",
+				Permissions: "0644",
+			},
+		},
+	}
+	userData := generateUserData(config)
+
+	if !strings.Contains(userData, "write_files:") {
+		t.Error("user-data should contain write_files section")
+	}
+	if !strings.Contains(userData, "path: /etc/motd") {
+		t.Error("user-data should contain file path")
+	}
+	if !strings.Contains(userData, "Welcome to the VM!") {
+		t.Error("user-data should contain file content")
+	}
+	if !strings.Contains(userData, "permissions: '0644'") {
+		t.Error("user-data should contain permissions")
+	}
+}
+
+func TestGenerateUserData_WriteFilesMultiline(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		WriteFiles: []providerv1.WriteFileSpec{
+			{
+				Path:    "/usr/local/bin/test.sh",
+				Content: "#!/bin/bash\necho \"Hello\"\nexit 0",
+			},
+		},
+	}
+	userData := generateUserData(config)
+
+	if !strings.Contains(userData, "content: |") {
+		t.Error("user-data should use literal block style for content")
+	}
+	if !strings.Contains(userData, "#!/bin/bash") {
+		t.Error("user-data should contain first line of script")
+	}
+	if !strings.Contains(userData, "echo \"Hello\"") {
+		t.Error("user-data should contain middle line of script")
+	}
+}
+
+func TestGenerateUserData_WriteFilesNoPermissions(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		WriteFiles: []providerv1.WriteFileSpec{
+			{Path: "/tmp/test", Content: "data"},
+		},
+	}
+	userData := generateUserData(config)
+
+	if !strings.Contains(userData, "path: /tmp/test") {
+		t.Error("user-data should contain file path")
+	}
+	// Should not have permissions line when not specified
+	lines := strings.Split(userData, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "path: /tmp/test") {
+			// Check next few lines don't have permissions
+			for j := i + 1; j < len(lines) && j < i+4; j++ {
+				if strings.Contains(lines[j], "permissions:") {
+					t.Error("user-data should not include permissions when not specified")
+				}
+				if strings.HasPrefix(strings.TrimSpace(lines[j]), "- ") || strings.HasPrefix(strings.TrimSpace(lines[j]), "runcmd") {
+					break // Next section started
+				}
+			}
+			break
+		}
 	}
 }

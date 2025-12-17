@@ -27,19 +27,24 @@ import (
 // CloudInitConfig holds configuration for cloud-init.
 type CloudInitConfig struct {
 	VMName          string
-	Username        string
-	SSHKeys         []string
+	Hostname        string
+	Users           []providerv1.UserSpec
 	Packages        []string
-	RunCMD          []string
+	WriteFiles      []providerv1.WriteFileSpec
+	Runcmd          []string
 	MatchedKeyNames []string // Names of provider keys that match SSH authorized keys
 }
 
 // generateMetaData generates the cloud-init meta-data file content.
-func generateMetaData(vmName string) string {
+func generateMetaData(config *CloudInitConfig) string {
+	hostname := config.Hostname
+	if hostname == "" {
+		hostname = config.VMName
+	}
 	return fmt.Sprintf(`instance-id: %s
 hostname: %s
 local-hostname: %s
-`, vmName, vmName, vmName)
+`, config.VMName, hostname, hostname)
 }
 
 // generateUserData generates the cloud-init user-data file content.
@@ -49,24 +54,36 @@ func generateUserData(config *CloudInitConfig) string {
 	sb.WriteString("#cloud-config\n\n")
 
 	// User configuration
-	username := config.Username
-	if username == "" {
-		username = "ubuntu"
-	}
-
-	sb.WriteString("users:\n")
-	sb.WriteString(fmt.Sprintf("  - name: %s\n", username))
-	sb.WriteString("    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n")
-	sb.WriteString("    shell: /bin/bash\n")
-
-	if len(config.SSHKeys) > 0 {
-		sb.WriteString("    ssh-authorized-keys:\n")
-		for _, key := range config.SSHKeys {
-			sb.WriteString(fmt.Sprintf("      - %s", strings.TrimSpace(key)))
-			if !strings.HasSuffix(key, "\n") {
-				sb.WriteString("\n")
+	if len(config.Users) > 0 {
+		sb.WriteString("users:\n")
+		for _, user := range config.Users {
+			sb.WriteString(fmt.Sprintf("  - name: %s\n", user.Name))
+			// Sudo (default: ALL=(ALL) NOPASSWD:ALL)
+			sudo := user.Sudo
+			if sudo == "" {
+				sudo = "ALL=(ALL) NOPASSWD:ALL"
+			}
+			sb.WriteString(fmt.Sprintf("    sudo: ['%s']\n", sudo))
+			// Shell (default: /bin/bash)
+			shell := user.Shell
+			if shell == "" {
+				shell = "/bin/bash"
+			}
+			sb.WriteString(fmt.Sprintf("    shell: %s\n", shell))
+			// SSH authorized keys
+			if len(user.SSHAuthorizedKeys) > 0 {
+				sb.WriteString("    ssh-authorized-keys:\n")
+				for _, key := range user.SSHAuthorizedKeys {
+					sb.WriteString(fmt.Sprintf("      - %s\n", strings.TrimSpace(key)))
+				}
 			}
 		}
+	} else {
+		// Default user if none specified
+		sb.WriteString("users:\n")
+		sb.WriteString("  - name: ubuntu\n")
+		sb.WriteString("    sudo: ['ALL=(ALL) NOPASSWD:ALL']\n")
+		sb.WriteString("    shell: /bin/bash\n")
 	}
 
 	// Packages
@@ -77,9 +94,25 @@ func generateUserData(config *CloudInitConfig) string {
 		}
 	}
 
+	// Write files
+	if len(config.WriteFiles) > 0 {
+		sb.WriteString("\nwrite_files:\n")
+		for _, wf := range config.WriteFiles {
+			sb.WriteString(fmt.Sprintf("  - path: %s\n", wf.Path))
+			sb.WriteString("    content: |\n")
+			// Indent each line of content by 6 spaces
+			for _, line := range strings.Split(wf.Content, "\n") {
+				sb.WriteString(fmt.Sprintf("      %s\n", line))
+			}
+			if wf.Permissions != "" {
+				sb.WriteString(fmt.Sprintf("    permissions: '%s'\n", wf.Permissions))
+			}
+		}
+	}
+
 	// Run commands (always include boot-finished marker)
 	sb.WriteString("\nruncmd:\n")
-	for _, cmd := range config.RunCMD {
+	for _, cmd := range config.Runcmd {
 		sb.WriteString(fmt.Sprintf("  - %s\n", cmd))
 	}
 	sb.WriteString("  - touch /var/lib/cloud/instance/boot-finished\n")
@@ -118,7 +151,7 @@ func generateCloudInitISO(config *CloudInitConfig, outputPath, isoTool string) e
 
 	// Write meta-data
 	metaDataPath := filepath.Join(tmpDir, "meta-data")
-	if err := os.WriteFile(metaDataPath, []byte(generateMetaData(config.VMName)), 0644); err != nil {
+	if err := os.WriteFile(metaDataPath, []byte(generateMetaData(config)), 0644); err != nil {
 		return fmt.Errorf("failed to write meta-data: %w", err)
 	}
 
@@ -164,31 +197,26 @@ func generateCloudInitISO(config *CloudInitConfig, outputPath, isoTool string) e
 func cloudInitConfigFromVMSpec(vmName string, spec *providerv1.VMSpec, keys map[string]*providerv1.KeyState) *CloudInitConfig {
 	config := &CloudInitConfig{
 		VMName:          vmName,
-		Username:        "ubuntu", // Default username
 		MatchedKeyNames: make([]string, 0),
 	}
 
 	if spec.CloudInit != nil {
-		// Extract username from first user if available
-		if len(spec.CloudInit.Users) > 0 {
-			config.Username = spec.CloudInit.Users[0].Name
-			// Collect SSH keys from users
-			for _, user := range spec.CloudInit.Users {
-				config.SSHKeys = append(config.SSHKeys, user.SSHAuthorizedKeys...)
-			}
-		}
-
+		config.Hostname = spec.CloudInit.Hostname
+		config.Users = spec.CloudInit.Users
 		config.Packages = spec.CloudInit.Packages
-		config.RunCMD = spec.CloudInit.RunCommands
+		config.WriteFiles = spec.CloudInit.WriteFiles
+		config.Runcmd = spec.CloudInit.Runcmd
 	}
 
 	// Match SSH authorized keys against provider keys
-	for _, sshKey := range config.SSHKeys {
-		sshKeyTrimmed := strings.TrimSpace(sshKey)
-		for keyName, keyState := range keys {
-			if strings.TrimSpace(keyState.PublicKey) == sshKeyTrimmed {
-				config.MatchedKeyNames = append(config.MatchedKeyNames, keyName)
-				break // Each SSH key matches at most one provider key
+	for _, user := range config.Users {
+		for _, sshKey := range user.SSHAuthorizedKeys {
+			sshKeyTrimmed := strings.TrimSpace(sshKey)
+			for keyName, keyState := range keys {
+				if strings.TrimSpace(keyState.PublicKey) == sshKeyTrimmed {
+					config.MatchedKeyNames = append(config.MatchedKeyNames, keyName)
+					break // Each SSH key matches at most one provider key
+				}
 			}
 		}
 	}

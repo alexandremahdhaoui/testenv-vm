@@ -131,12 +131,16 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 
 	// Generate SSH command if we have an IP and matched keys
 	sshCommand := ""
-	if ip != "" && ciConfig.Username != "" && len(ciConfig.MatchedKeyNames) > 0 {
+	username := "ubuntu" // default username
+	if len(ciConfig.Users) > 0 {
+		username = ciConfig.Users[0].Name
+	}
+	if ip != "" && username != "" && len(ciConfig.MatchedKeyNames) > 0 {
 		// Use the first matched key for the SSH command
 		firstKeyName := ciConfig.MatchedKeyNames[0]
 		if key, exists := p.keys[firstKeyName]; exists {
 			sshCommand = fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no %s@%s",
-				key.PrivateKeyPath, ciConfig.Username, ip)
+				key.PrivateKeyPath, username, ip)
 		}
 	}
 

@@ -96,8 +96,8 @@ type CloudInitSpec struct {
 	Packages []string `json:"packages,omitempty"`
 	// WriteFiles defines files to write.
 	WriteFiles []WriteFileSpec `json:"writeFiles,omitempty"`
-	// RunCommands defines commands to run.
-	RunCommands []string `json:"runCommands,omitempty"`
+	// Runcmd defines commands to run at boot (cloud-init runcmd directive).
+	Runcmd []string `json:"runcmd,omitempty"`
 }
 
 // UserSpec defines a user to create via cloud-init.

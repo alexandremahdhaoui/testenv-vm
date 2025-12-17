@@ -27,7 +27,7 @@
 // - wget for downloading cloud images (auto-downloaded if not cached)
 //
 // Optional:
-// - Set TESTENV_VM_LIBVIRT_URI to customize the connection (default: qemu:///session)
+// - Set TESTENV_VM_LIBVIRT_URI to customize the connection (default: qemu:///system)
 // - Set TESTENV_VM_IMAGE_CACHE_DIR to customize image cache location (default: /tmp/testenv-vm-images)
 package libvirt
 
@@ -99,11 +99,11 @@ func integrationTestProvider(t *testing.T) (*Provider, func()) {
 	}
 	prepareLibvirtDir(t, cloudinitDir)
 
-	// Set up environment for session-based testing
-	// Use qemu:///session for non-root testing
+	// Set up environment for system-based testing
+	// Use qemu:///system for full libvirt functionality (DHCP, networking)
 	uri := os.Getenv("TESTENV_VM_LIBVIRT_URI")
 	if uri == "" {
-		uri = "qemu:///session"
+		uri = "qemu:///system"
 	}
 
 	os.Setenv("TESTENV_VM_LIBVIRT_URI", uri)
@@ -129,7 +129,7 @@ func checkLibvirtAvailable(t *testing.T) bool {
 	t.Helper()
 
 	// Try to run virsh to check if libvirt is available
-	cmd := exec.Command("virsh", "--connect", "qemu:///session", "version")
+	cmd := exec.Command("virsh", "--connect", "qemu:///system", "version")
 	if err := cmd.Run(); err != nil {
 		return false
 	}
@@ -137,33 +137,13 @@ func checkLibvirtAvailable(t *testing.T) bool {
 }
 
 // prepareLibvirtDir prepares a directory with permissions accessible by libvirt.
-// This is necessary because libvirt runs as a separate user and needs to access disk files.
+// Sets permissions and ACLs on the specified directory only (never modifies parent directories).
 func prepareLibvirtDir(t *testing.T, dir string) {
 	t.Helper()
 
 	// Set directory permissions to 0755 (world readable/executable)
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Logf("Warning: failed to chmod directory %s: %v", dir, err)
-	}
-
-	// Try to set permissions on parent directories as well
-	// Libvirt needs +x permission on all ancestor directories to traverse
-	currentDir := dir
-	for {
-		if err := os.Chmod(currentDir, 0o755); err != nil {
-			t.Logf("Warning: failed to chmod directory %s: %v", currentDir, err)
-		}
-
-		// Stop at /tmp or root
-		if currentDir == "/tmp" || currentDir == "/" {
-			break
-		}
-
-		parentDir := filepath.Dir(currentDir)
-		if parentDir == currentDir {
-			break
-		}
-		currentDir = parentDir
 	}
 
 	// Try to set ACLs for libvirt groups (optional, requires setfacl)
@@ -180,7 +160,7 @@ func prepareLibvirtDir(t *testing.T, dir string) {
 			continue // Group doesn't exist
 		}
 
-		// Set ACL for this group
+		// Set ACL for this group on the specified directory only
 		aclCmd := exec.Command(setfaclPath, "-m", "g:"+group+":rwx", dir)
 		if err := aclCmd.Run(); err != nil {
 			t.Logf("Warning: failed to set ACL for group %s: %v", group, err)
@@ -853,4 +833,321 @@ func TestIntegration_ProviderCapabilities(t *testing.T) {
 			t.Errorf("expected resource kind '%s' to be supported", kind)
 		}
 	}
+}
+
+// sshExecWithKey executes a command on a remote host via SSH using a private key.
+// Returns stdout, stderr, and any error.
+func sshExecWithKey(t *testing.T, privateKeyPath, user, host string, command string) (string, string, error) {
+	t.Helper()
+
+	cmd := exec.Command("ssh",
+		"-i", privateKeyPath,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=5",
+		"-o", "BatchMode=yes",
+		user+"@"+host,
+		command,
+	)
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// waitForCloudInit waits for cloud-init to complete by checking for the boot-finished marker.
+// Returns an error if cloud-init doesn't complete within the timeout.
+func waitForCloudInit(t *testing.T, privateKeyPath, user, host string, timeout time.Duration) error {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, user, host, "test -f /var/lib/cloud/instance/boot-finished && echo 'ready'")
+		if err == nil && strings.TrimSpace(stdout) == "ready" {
+			t.Log("Cloud-init completed successfully")
+			return nil
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return exec.Command("false").Run() // Return an error
+}
+
+// TestIntegration_CloudInitVerification tests that cloud-init properly configures the VM.
+// This test verifies:
+// - Custom hostname is set
+// - WriteFiles creates files with correct content and permissions
+// - Multiple users are created with correct settings
+// - Runcmd executes commands (verified by marker file creation)
+func TestIntegration_CloudInitVerification(t *testing.T) {
+	provider, cleanup := integrationTestProvider(t)
+	defer cleanup()
+
+	// Ensure base image is available
+	baseImage := ensureBaseImage(t)
+
+	vmName := "cloudinit-verify-vm"
+	networkName := "cloudinit-verify-net"
+	keyName := "cloudinit-verify-key"
+	customHostname := "my-custom-hostname"
+
+	// Cleanup any existing resources
+	_ = provider.VMDelete(vmName)
+	_ = provider.NetworkDelete(networkName)
+	_ = provider.KeyDelete(keyName)
+
+	// Create SSH key for authentication
+	keyReq := &providerv1.KeyCreateRequest{
+		Name: keyName,
+		Spec: providerv1.KeySpec{
+			Type: "ed25519",
+		},
+	}
+	keyResult := provider.KeyCreate(keyReq)
+	if !keyResult.Success {
+		t.Fatalf("KeyCreate failed: %v", keyResult.Error)
+	}
+	keyState := keyResult.Resource.(*providerv1.KeyState)
+	t.Logf("Created key: %s, private key path: %s", keyName, keyState.PrivateKeyPath)
+	privateKeyPath := keyState.PrivateKeyPath
+
+	// Create network
+	netReq := &providerv1.NetworkCreateRequest{
+		Name: networkName,
+		Kind: "nat",
+		Spec: providerv1.NetworkSpec{
+			CIDR: "192.168.231.0/24",
+		},
+	}
+	netResult := provider.NetworkCreate(netReq)
+	if !netResult.Success {
+		provider.KeyDelete(keyName)
+		t.Fatalf("NetworkCreate failed: %v", netResult.Error)
+	}
+	t.Logf("Created network: %s", networkName)
+
+	// Create VM with comprehensive cloud-init config
+	vmReq := &providerv1.VMCreateRequest{
+		Name: vmName,
+		Spec: providerv1.VMSpec{
+			Memory:  512,
+			VCPUs:   1,
+			Network: networkName,
+			Disk: providerv1.DiskSpec{
+				BaseImage: baseImage,
+				Size:      "5G",
+			},
+			CloudInit: &providerv1.CloudInitSpec{
+				Hostname: customHostname,
+				Users: []providerv1.UserSpec{
+					{
+						Name:  "testadmin",
+						Sudo:  "ALL=(ALL) NOPASSWD:ALL",
+						Shell: "/bin/bash",
+						SSHAuthorizedKeys: []string{
+							strings.TrimSpace(keyState.PublicKey),
+						},
+					},
+					{
+						Name:  "testuser",
+						Shell: "/bin/sh",
+					},
+				},
+				Packages: []string{"curl"},
+				WriteFiles: []providerv1.WriteFileSpec{
+					{
+						Path:        "/tmp/cloudinit-test-file.txt",
+						Content:     "Hello from cloud-init!\nThis is line 2.",
+						Permissions: "0644",
+					},
+					{
+						Path:        "/tmp/cloudinit-script.sh",
+						Content:     "#!/bin/bash\necho 'script works'",
+						Permissions: "0755",
+					},
+				},
+				Runcmd: []string{
+					"touch /tmp/runcmd-marker-file",
+					"echo 'runcmd executed' > /tmp/runcmd-output.txt",
+				},
+			},
+		},
+	}
+
+	vmResult := provider.VMCreate(vmReq)
+	if !vmResult.Success {
+		provider.NetworkDelete(networkName)
+		provider.KeyDelete(keyName)
+		t.Fatalf("VMCreate failed: %v", vmResult.Error)
+	}
+	vmState := vmResult.Resource.(*providerv1.VMState)
+	t.Logf("Created VM: %s, IP: %s", vmName, vmState.IP)
+
+	// Ensure cleanup
+	defer func() {
+		provider.VMDelete(vmName)
+		provider.NetworkDelete(networkName)
+		provider.KeyDelete(keyName)
+	}()
+
+	// Get VM MAC address for IP resolution
+	getResult := provider.VMGet(vmName)
+	if !getResult.Success {
+		t.Fatalf("VMGet failed: %v", getResult.Error)
+	}
+	vm := getResult.Resource.(*providerv1.VMState)
+	vmMAC := vm.MAC
+	t.Logf("VM MAC address: %s", vmMAC)
+
+	// Resolve IP using virsh net-dhcp-leases (more reliable than provider cache)
+	var vmIP string
+	t.Log("Waiting for VM to get an IP address via DHCP...")
+	for i := 0; i < 90; i++ {
+		// Try to get IP from network DHCP leases
+		cmd := exec.Command("virsh", "--connect", "qemu:///system", "net-dhcp-leases", networkName)
+		output, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				if strings.Contains(strings.ToLower(line), strings.ToLower(vmMAC)) {
+					fields := strings.Fields(line)
+					for _, field := range fields {
+						// Look for IP address pattern (contains /)
+						if strings.Contains(field, "/") && strings.Contains(field, ".") {
+							vmIP = strings.Split(field, "/")[0]
+							t.Logf("VM got IP: %s (after %d seconds)", vmIP, i*2)
+							break
+						}
+					}
+				}
+				if vmIP != "" {
+					break
+				}
+			}
+		}
+		if vmIP != "" {
+			break
+		}
+		if i > 0 && i%15 == 0 {
+			t.Logf("Still waiting for IP... (%d seconds)", i*2)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if vmIP == "" {
+		t.Fatal("VM did not get an IP address within timeout (3 minutes)")
+	}
+
+	// Wait for cloud-init to complete (up to 5 minutes)
+	t.Log("Waiting for cloud-init to complete...")
+	if err := waitForCloudInit(t, privateKeyPath, "testadmin", vmIP, 5*time.Minute); err != nil {
+		t.Fatalf("Cloud-init did not complete within timeout")
+	}
+
+	// Test 1: Verify hostname
+	t.Run("VerifyHostname", func(t *testing.T) {
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "hostname")
+		if err != nil {
+			t.Fatalf("Failed to get hostname: %v", err)
+		}
+		hostname := strings.TrimSpace(stdout)
+		if hostname != customHostname {
+			t.Errorf("Expected hostname %q, got %q", customHostname, hostname)
+		}
+		t.Logf("Hostname verified: %s", hostname)
+	})
+
+	// Test 2: Verify write_files created files
+	t.Run("VerifyWriteFiles", func(t *testing.T) {
+		// Check first file content
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "cat /tmp/cloudinit-test-file.txt")
+		if err != nil {
+			t.Fatalf("Failed to read test file: %v", err)
+		}
+		if !strings.Contains(stdout, "Hello from cloud-init!") {
+			t.Errorf("Expected file to contain 'Hello from cloud-init!', got: %s", stdout)
+		}
+		if !strings.Contains(stdout, "This is line 2.") {
+			t.Errorf("Expected file to contain 'This is line 2.', got: %s", stdout)
+		}
+		t.Log("write_files content verified")
+
+		// Check script file permissions
+		stdout, _, err = sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "stat -c %a /tmp/cloudinit-script.sh")
+		if err != nil {
+			t.Fatalf("Failed to check script permissions: %v", err)
+		}
+		perms := strings.TrimSpace(stdout)
+		if perms != "755" {
+			t.Errorf("Expected script permissions 755, got %s", perms)
+		}
+		t.Logf("write_files permissions verified: %s", perms)
+	})
+
+	// Test 3: Verify multiple users created
+	t.Run("VerifyUsers", func(t *testing.T) {
+		// Check testadmin exists
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "id testadmin")
+		if err != nil {
+			t.Fatalf("Failed to check testadmin user: %v", err)
+		}
+		if !strings.Contains(stdout, "testadmin") {
+			t.Errorf("testadmin user not found: %s", stdout)
+		}
+		t.Log("testadmin user verified")
+
+		// Check testuser exists
+		stdout, _, err = sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "id testuser")
+		if err != nil {
+			t.Fatalf("Failed to check testuser: %v", err)
+		}
+		if !strings.Contains(stdout, "testuser") {
+			t.Errorf("testuser not found: %s", stdout)
+		}
+		t.Log("testuser verified")
+
+		// Check testuser shell
+		stdout, _, err = sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "getent passwd testuser | cut -d: -f7")
+		if err != nil {
+			t.Fatalf("Failed to check testuser shell: %v", err)
+		}
+		shell := strings.TrimSpace(stdout)
+		if shell != "/bin/sh" {
+			t.Errorf("Expected testuser shell /bin/sh, got %s", shell)
+		}
+		t.Logf("testuser shell verified: %s", shell)
+	})
+
+	// Test 4: Verify runcmd executed
+	t.Run("VerifyRuncmd", func(t *testing.T) {
+		// Check marker file exists
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "test -f /tmp/runcmd-marker-file && echo 'exists'")
+		if err != nil || strings.TrimSpace(stdout) != "exists" {
+			t.Errorf("runcmd marker file not found")
+		}
+		t.Log("runcmd marker file verified")
+
+		// Check runcmd output file
+		stdout, _, err = sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "cat /tmp/runcmd-output.txt")
+		if err != nil {
+			t.Fatalf("Failed to read runcmd output: %v", err)
+		}
+		if !strings.Contains(stdout, "runcmd executed") {
+			t.Errorf("Expected runcmd output 'runcmd executed', got: %s", stdout)
+		}
+		t.Log("runcmd output verified")
+	})
+
+	// Test 5: Verify packages installed
+	t.Run("VerifyPackages", func(t *testing.T) {
+		stdout, _, err := sshExecWithKey(t, privateKeyPath, "testadmin", vmIP, "which curl")
+		if err != nil {
+			t.Errorf("curl package not installed: %v", err)
+		} else {
+			t.Logf("curl installed at: %s", strings.TrimSpace(stdout))
+		}
+	})
+
+	t.Log("All cloud-init verification tests passed!")
 }

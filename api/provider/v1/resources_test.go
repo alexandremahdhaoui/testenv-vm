@@ -73,7 +73,7 @@ func TestVMCreateRequest_JSONRoundtrip(t *testing.T) {
 						},
 						Packages:    []string{"vim", "curl", "htop"},
 						WriteFiles:  []WriteFileSpec{{Path: "/etc/motd", Content: "Welcome!", Permissions: "0644"}},
-						RunCommands: []string{"apt-get update"},
+						Runcmd: []string{"apt-get update"},
 					},
 					Boot: BootSpec{
 						Order:      []string{"hd", "network"},
