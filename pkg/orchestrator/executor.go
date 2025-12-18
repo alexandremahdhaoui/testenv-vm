@@ -640,6 +640,24 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 				Permissions: wf.Permissions,
 			})
 		}
+		// Convert network config if present
+		if spec.CloudInit.NetworkConfig != nil {
+			result.CloudInit.NetworkConfig = &providerv1.CloudInitNetworkConfig{}
+			for _, eth := range spec.CloudInit.NetworkConfig.Ethernets {
+				providerEth := providerv1.CloudInitEthernetConfig{
+					Name:      eth.Name,
+					DHCP4:     eth.DHCP4,
+					Addresses: eth.Addresses,
+					Gateway4:  eth.Gateway4,
+				}
+				if eth.Nameservers != nil {
+					providerEth.Nameservers = &providerv1.CloudInitNameservers{
+						Addresses: eth.Nameservers.Addresses,
+					}
+				}
+				result.CloudInit.NetworkConfig.Ethernets = append(result.CloudInit.NetworkConfig.Ethernets, providerEth)
+			}
+		}
 	}
 
 	if spec.Readiness != nil && spec.Readiness.SSH != nil {

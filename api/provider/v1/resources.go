@@ -98,6 +98,37 @@ type CloudInitSpec struct {
 	WriteFiles []WriteFileSpec `json:"writeFiles,omitempty"`
 	// Runcmd defines commands to run at boot (cloud-init runcmd directive).
 	Runcmd []string `json:"runcmd,omitempty"`
+	// NetworkConfig configures the network via cloud-init's network-config.
+	// If nil, uses DHCP on all ethernet interfaces.
+	NetworkConfig *CloudInitNetworkConfig `json:"networkConfig,omitempty"`
+}
+
+// CloudInitNetworkConfig configures cloud-init network settings.
+// Uses netplan version 2 format.
+type CloudInitNetworkConfig struct {
+	// Ethernets configures ethernet interfaces.
+	Ethernets []CloudInitEthernetConfig `json:"ethernets,omitempty"`
+}
+
+// CloudInitEthernetConfig configures a single ethernet interface.
+type CloudInitEthernetConfig struct {
+	// Name is the interface name pattern (e.g., "ens2", "en*", "eth*").
+	// Supports wildcards for matching.
+	Name string `json:"name"`
+	// DHCP4 enables DHCP for IPv4 if true. Defaults to false if Addresses is set.
+	DHCP4 *bool `json:"dhcp4,omitempty"`
+	// Addresses is a list of static IP addresses in CIDR notation (e.g., "192.168.100.2/24").
+	Addresses []string `json:"addresses,omitempty"`
+	// Gateway4 is the IPv4 gateway address.
+	Gateway4 string `json:"gateway4,omitempty"`
+	// Nameservers configures DNS servers.
+	Nameservers *CloudInitNameservers `json:"nameservers,omitempty"`
+}
+
+// CloudInitNameservers configures DNS servers.
+type CloudInitNameservers struct {
+	// Addresses is a list of DNS server IP addresses.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // UserSpec defines a user to create via cloud-init.

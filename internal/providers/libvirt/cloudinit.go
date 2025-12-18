@@ -32,6 +32,7 @@ type CloudInitConfig struct {
 	Packages        []string
 	WriteFiles      []providerv1.WriteFileSpec
 	Runcmd          []string
+	NetworkConfig   *providerv1.CloudInitNetworkConfig
 	MatchedKeyNames []string // Names of provider keys that match SSH authorized keys
 }
 
@@ -122,10 +123,11 @@ func generateUserData(config *CloudInitConfig) string {
 
 // generateNetworkConfig generates the cloud-init network-config file content.
 // Uses netplan version 2 format with broad interface matching for reliability.
-func generateNetworkConfig() string {
-	// Match all ethernet interfaces and enable DHCP. This is more reliable
-	// than matching on driver as it works regardless of interface naming.
-	return `version: 2
+// If a custom network config is provided, it will be used instead of the default DHCP config.
+func generateNetworkConfig(config *providerv1.CloudInitNetworkConfig) string {
+	// If no custom config provided, use default DHCP on all ethernet interfaces
+	if config == nil || len(config.Ethernets) == 0 {
+		return `version: 2
 ethernets:
   all-en:
     match:
@@ -136,6 +138,74 @@ ethernets:
       name: "eth*"
     dhcp4: true
 `
+	}
+
+	// Generate custom network config
+	var sb strings.Builder
+	sb.WriteString("version: 2\n")
+	sb.WriteString("ethernets:\n")
+
+	for i, eth := range config.Ethernets {
+		// Use interface name or generate a unique identifier
+		ifaceName := eth.Name
+		if ifaceName == "" {
+			ifaceName = fmt.Sprintf("eth%d", i)
+		}
+
+		// Check if name contains wildcards
+		hasWildcard := strings.Contains(ifaceName, "*")
+
+		if hasWildcard {
+			// Use match syntax for wildcard patterns
+			sb.WriteString(fmt.Sprintf("  %s:\n", sanitizeInterfaceName(ifaceName)))
+			sb.WriteString("    match:\n")
+			sb.WriteString(fmt.Sprintf("      name: \"%s\"\n", ifaceName))
+		} else {
+			// Direct interface name
+			sb.WriteString(fmt.Sprintf("  %s:\n", ifaceName))
+		}
+
+		// DHCP or static
+		if eth.DHCP4 != nil && *eth.DHCP4 {
+			sb.WriteString("    dhcp4: true\n")
+		} else if len(eth.Addresses) > 0 {
+			sb.WriteString("    dhcp4: false\n")
+			sb.WriteString("    addresses:\n")
+			for _, addr := range eth.Addresses {
+				sb.WriteString(fmt.Sprintf("      - %s\n", addr))
+			}
+
+			// Routes/gateway
+			if eth.Gateway4 != "" {
+				sb.WriteString("    routes:\n")
+				sb.WriteString("      - to: default\n")
+				sb.WriteString(fmt.Sprintf("        via: %s\n", eth.Gateway4))
+			}
+
+			// Nameservers
+			if eth.Nameservers != nil && len(eth.Nameservers.Addresses) > 0 {
+				sb.WriteString("    nameservers:\n")
+				sb.WriteString("      addresses:\n")
+				for _, ns := range eth.Nameservers.Addresses {
+					sb.WriteString(fmt.Sprintf("        - %s\n", ns))
+				}
+			}
+		} else {
+			// Default to DHCP if no addresses specified
+			sb.WriteString("    dhcp4: true\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// sanitizeInterfaceName creates a valid netplan key from an interface pattern
+func sanitizeInterfaceName(name string) string {
+	// Replace wildcards with descriptive text
+	result := strings.ReplaceAll(name, "*", "all")
+	// Replace other invalid chars
+	result = strings.ReplaceAll(result, "-", "_")
+	return result
 }
 
 // generateCloudInitISO generates a cloud-init ISO file.
@@ -163,7 +233,7 @@ func generateCloudInitISO(config *CloudInitConfig, outputPath, isoTool string) e
 
 	// Write network-config
 	networkConfigPath := filepath.Join(tmpDir, "network-config")
-	if err := os.WriteFile(networkConfigPath, []byte(generateNetworkConfig()), 0644); err != nil {
+	if err := os.WriteFile(networkConfigPath, []byte(generateNetworkConfig(config.NetworkConfig)), 0644); err != nil {
 		return fmt.Errorf("failed to write network-config: %w", err)
 	}
 
@@ -206,6 +276,7 @@ func cloudInitConfigFromVMSpec(vmName string, spec *providerv1.VMSpec, keys map[
 		config.Packages = spec.CloudInit.Packages
 		config.WriteFiles = spec.CloudInit.WriteFiles
 		config.Runcmd = spec.CloudInit.Runcmd
+		config.NetworkConfig = spec.CloudInit.NetworkConfig
 	}
 
 	// Match SSH authorized keys against provider keys
