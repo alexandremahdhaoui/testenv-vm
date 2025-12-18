@@ -624,12 +624,20 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		result.CloudInit = &providerv1.CloudInitSpec{
 			Hostname: spec.CloudInit.Hostname,
 			Packages: spec.CloudInit.Packages,
+			Runcmd:   spec.CloudInit.Runcmd,
 		}
 		for _, u := range spec.CloudInit.Users {
 			result.CloudInit.Users = append(result.CloudInit.Users, providerv1.UserSpec{
 				Name:              u.Name,
 				Sudo:              u.Sudo,
 				SSHAuthorizedKeys: u.SSHAuthorizedKeys,
+			})
+		}
+		for _, wf := range spec.CloudInit.WriteFiles {
+			result.CloudInit.WriteFiles = append(result.CloudInit.WriteFiles, providerv1.WriteFileSpec{
+				Path:        wf.Path,
+				Content:     wf.Content,
+				Permissions: wf.Permissions,
 			})
 		}
 	}

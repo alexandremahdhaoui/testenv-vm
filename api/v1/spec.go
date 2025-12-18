@@ -215,6 +215,20 @@ type CloudInitSpec struct {
 	Users []UserSpec `json:"users,omitempty" yaml:"users,omitempty"`
 	// Packages to install.
 	Packages []string `json:"packages,omitempty" yaml:"packages,omitempty"`
+	// WriteFiles configures files to write.
+	WriteFiles []WriteFileSpec `json:"writeFiles,omitempty" yaml:"writeFiles,omitempty"`
+	// Runcmd configures commands to run.
+	Runcmd []string `json:"runcmd,omitempty" yaml:"runcmd,omitempty"`
+}
+
+// WriteFileSpec configures a file to write via cloud-init.
+type WriteFileSpec struct {
+	// Path is the file path.
+	Path string `json:"path" yaml:"path"`
+	// Content is the file content.
+	Content string `json:"content" yaml:"content"`
+	// Permissions is the file permissions (e.g., "0644").
+	Permissions string `json:"permissions,omitempty" yaml:"permissions,omitempty"`
 }
 
 // UserSpec defines a user to create via cloud-init.
