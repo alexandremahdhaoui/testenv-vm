@@ -94,13 +94,25 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		vcpu = req.Spec.VCPUs
 	}
 
+	// Check if network boot is enabled
+	hasNetworkBoot := false
+	for _, dev := range req.Spec.Boot.Order {
+		if dev == "network" {
+			hasNetworkBoot = true
+			break
+		}
+	}
+
 	domainConfig := DomainConfig{
-		Name:         req.Name,
-		MemoryMB:     memoryMB,
-		VCPU:         vcpu,
-		DiskPath:     diskPath,
-		CloudInitISO: isoPath,
-		NetworkName:  networkName,
+		Name:           req.Name,
+		MemoryMB:       memoryMB,
+		VCPU:           vcpu,
+		DiskPath:       diskPath,
+		CloudInitISO:   isoPath,
+		NetworkName:    networkName,
+		BootOrder:      req.Spec.Boot.Order,
+		Firmware:       req.Spec.Boot.Firmware,
+		HasNetworkBoot: hasNetworkBoot,
 	}
 
 	// Generate domain XML

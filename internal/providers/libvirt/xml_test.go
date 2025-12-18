@@ -140,12 +140,13 @@ func TestGenerateBridgeName_Uniqueness(t *testing.T) {
 
 func TestGenerateNATNetworkXML(t *testing.T) {
 	config := NetworkConfig{
-		Name:       "test-nat",
-		BridgeName: "virbr-test",
-		Gateway:    "192.168.100.1",
-		Netmask:    "255.255.255.0",
-		DHCPStart:  "192.168.100.2",
-		DHCPEnd:    "192.168.100.254",
+		Name:        "test-nat",
+		BridgeName:  "virbr-test",
+		Gateway:     "192.168.100.1",
+		Netmask:     "255.255.255.0",
+		DHCPEnabled: true,
+		DHCPStart:   "192.168.100.2",
+		DHCPEnd:     "192.168.100.254",
 	}
 
 	xml, err := generateNATNetworkXML(config)
@@ -428,12 +429,13 @@ func TestParseCIDR_EdgeCases(t *testing.T) {
 
 func TestGenerateNATNetworkXML_Complete(t *testing.T) {
 	config := NetworkConfig{
-		Name:       "complete-nat",
-		BridgeName: "virbr-complete",
-		Gateway:    "10.10.10.1",
-		Netmask:    "255.255.255.0",
-		DHCPStart:  "10.10.10.10",
-		DHCPEnd:    "10.10.10.200",
+		Name:        "complete-nat",
+		BridgeName:  "virbr-complete",
+		Gateway:     "10.10.10.1",
+		Netmask:     "255.255.255.0",
+		DHCPEnabled: true,
+		DHCPStart:   "10.10.10.10",
+		DHCPEnd:     "10.10.10.200",
 	}
 
 	xml, err := generateNATNetworkXML(config)
@@ -464,12 +466,13 @@ func TestGenerateNATNetworkXML_Complete(t *testing.T) {
 
 func TestGenerateIsolatedNetworkXML_Complete(t *testing.T) {
 	config := NetworkConfig{
-		Name:       "isolated-complete",
-		BridgeName: "virbr-iso",
-		Gateway:    "172.16.0.1",
-		Netmask:    "255.255.0.0",
-		DHCPStart:  "172.16.0.10",
-		DHCPEnd:    "172.16.255.200",
+		Name:        "isolated-complete",
+		BridgeName:  "virbr-iso",
+		Gateway:     "172.16.0.1",
+		Netmask:     "255.255.0.0",
+		DHCPEnabled: true,
+		DHCPStart:   "172.16.0.10",
+		DHCPEnd:     "172.16.255.200",
 	}
 
 	xml, err := generateIsolatedNetworkXML(config)

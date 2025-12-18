@@ -36,12 +36,15 @@ type NetworkConfig struct {
 
 // DomainConfig holds configuration for generating domain XML.
 type DomainConfig struct {
-	Name         string
-	MemoryMB     int
-	VCPU         int
-	DiskPath     string
-	CloudInitISO string
-	NetworkName  string
+	Name           string
+	MemoryMB       int
+	VCPU           int
+	DiskPath       string
+	CloudInitISO   string
+	NetworkName    string
+	BootOrder      []string // Boot device order: "network", "hd", "cdrom"
+	Firmware       string   // "bios" or "uefi"
+	HasNetworkBoot bool     // True if BootOrder contains "network" (enables PXE ROM)
 }
 
 // generateBridgeName generates a unique bridge name from the network name.
@@ -158,7 +161,12 @@ const domainTemplate = `<domain type='kvm'>
     <vcpu>{{.VCPU}}</vcpu>
     <os>
         <type arch='x86_64'>hvm</type>
+{{- range .BootOrder}}
+        <boot dev='{{.}}'/>
+{{- end}}
+{{- if not .BootOrder}}
         <boot dev='hd'/>
+{{- end}}
     </os>
     <features>
         <acpi/>
@@ -185,6 +193,9 @@ const domainTemplate = `<domain type='kvm'>
         <interface type='network'>
             <source network='{{.NetworkName}}'/>
             <model type='virtio'/>
+{{- if .HasNetworkBoot}}
+            <rom bar='on'/>
+{{- end}}
         </interface>
 
         <!-- Serial console -->

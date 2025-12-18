@@ -179,7 +179,7 @@ func TestGenerateUserData_WithRuncmd(t *testing.T) {
 }
 
 func TestGenerateNetworkConfig(t *testing.T) {
-	networkConfig := generateNetworkConfig()
+	networkConfig := generateNetworkConfig(nil)
 
 	// Should have version 2
 	if !strings.Contains(networkConfig, "version: 2") {
