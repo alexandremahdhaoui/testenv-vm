@@ -25,12 +25,13 @@ import (
 
 // NetworkConfig holds configuration for generating network XML.
 type NetworkConfig struct {
-	Name       string
-	BridgeName string
-	Gateway    string
-	Netmask    string
-	DHCPStart  string
-	DHCPEnd    string
+	Name        string
+	BridgeName  string
+	Gateway     string
+	Netmask     string
+	DHCPEnabled bool
+	DHCPStart   string
+	DHCPEnd     string
 }
 
 // DomainConfig holds configuration for generating domain XML.
@@ -109,9 +110,11 @@ const natNetworkTemplate = `<network>
         </nat>
     </forward>
     <ip address='{{.Gateway}}' netmask='{{.Netmask}}'>
+{{- if .DHCPEnabled}}
         <dhcp>
             <range start='{{.DHCPStart}}' end='{{.DHCPEnd}}'/>
         </dhcp>
+{{- end}}
     </ip>
 </network>`
 
@@ -119,9 +122,11 @@ const isolatedNetworkTemplate = `<network>
     <name>{{.Name}}</name>
     <bridge name='{{.BridgeName}}'/>
     <ip address='{{.Gateway}}' netmask='{{.Netmask}}'>
+{{- if .DHCPEnabled}}
         <dhcp>
             <range start='{{.DHCPStart}}' end='{{.DHCPEnd}}'/>
         </dhcp>
+{{- end}}
     </ip>
 </network>`
 

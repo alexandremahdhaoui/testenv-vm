@@ -69,14 +69,22 @@ func (p *Provider) NetworkCreate(req *providerv1.NetworkCreateRequest) *provider
 	// Generate bridge name
 	bridgeName := generateBridgeName(req.Name)
 
+	// Determine if DHCP should be enabled
+	// Default to true for backward compatibility (if DHCP spec is nil)
+	dhcpEnabled := true
+	if req.Spec.DHCP != nil {
+		dhcpEnabled = req.Spec.DHCP.Enabled
+	}
+
 	// Build network config
 	config := NetworkConfig{
-		Name:       req.Name,
-		BridgeName: bridgeName,
-		Gateway:    gateway,
-		Netmask:    netmask,
-		DHCPStart:  dhcpStart,
-		DHCPEnd:    dhcpEnd,
+		Name:        req.Name,
+		BridgeName:  bridgeName,
+		Gateway:     gateway,
+		Netmask:     netmask,
+		DHCPEnabled: dhcpEnabled,
+		DHCPStart:   dhcpStart,
+		DHCPEnd:     dhcpEnd,
 	}
 
 	// Generate network XML based on kind
