@@ -447,6 +447,7 @@ components:
         timeout:
           type: string
           description: 'Timeout for SSH to become available (e.g., 5m).'
+          default: "3m"
         user:
           type: string
           description: User for SSH connection.
@@ -455,7 +456,6 @@ components:
           description: Private key path (can use template).
       required:
         - enabled
-        - timeout
 
     ResourceRef:
       type: object
