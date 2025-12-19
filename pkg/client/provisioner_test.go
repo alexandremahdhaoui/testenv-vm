@@ -60,8 +60,8 @@ func newTestEnvState(id string) *v1.EnvironmentState {
 	}
 }
 
-func newTestSpec(defaultProvider string, providers ...v1.ProviderConfig) *v1.TestenvSpec {
-	return &v1.TestenvSpec{
+func newTestSpec(defaultProvider string, providers ...v1.ProviderConfig) *v1.Spec {
+	return &v1.Spec{
 		DefaultProvider: defaultProvider,
 		Providers:       providers,
 	}
@@ -283,7 +283,7 @@ func TestValidateRuntimeVM_RejectsInvalidMemory(t *testing.T) {
 
 	err := rp.validateRuntimeVM("test-vm", v1.VMSpec{
 		Memory:  0, // Invalid
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "test-net",
 		Disk:    v1.DiskSpec{Size: "10G"},
 	}, "")
@@ -313,7 +313,7 @@ func TestValidateRuntimeVM_RejectsInvalidDiskSize(t *testing.T) {
 
 	err := rp.validateRuntimeVM("test-vm", v1.VMSpec{
 		Memory:  512,
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "test-net",
 		Disk:    v1.DiskSpec{Size: "invalid"},
 	}, "")
@@ -343,7 +343,7 @@ func TestValidateRuntimeVM_RejectsMissingNetwork(t *testing.T) {
 
 	err := rp.validateRuntimeVM("test-vm", v1.VMSpec{
 		Memory:  512,
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "nonexistent-net",
 		Disk:    v1.DiskSpec{Size: "10G"},
 	}, "")
@@ -373,7 +373,7 @@ func TestValidateRuntimeVM_RejectsNetworkNotReady(t *testing.T) {
 
 	err := rp.validateRuntimeVM("test-vm", v1.VMSpec{
 		Memory:  512,
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "test-net",
 		Disk:    v1.DiskSpec{Size: "10G"},
 	}, "")
@@ -429,7 +429,7 @@ func TestCreateVM_CleansUpOnValidationFailure(t *testing.T) {
 	// Invalid spec (memory = 0)
 	_, err := rp.CreateVM(context.Background(), "test-vm", v1.VMSpec{
 		Memory:  0,
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "test-net",
 		Disk:    v1.DiskSpec{Size: "10G"},
 	})
@@ -473,20 +473,20 @@ func TestDeleteVM_ReturnsErrorForNonexistentVM(t *testing.T) {
 func TestConvertVMSpec_ConvertsCloudInitCorrectly(t *testing.T) {
 	input := v1.VMSpec{
 		Memory:  1024,
-		VCPUs:   2,
+		Vcpus:   2,
 		Network: "test-net",
 		Disk: v1.DiskSpec{
 			BaseImage: "/path/to/image.qcow2",
 			Size:      "20G",
 		},
-		CloudInit: &v1.CloudInitSpec{
+		CloudInit: v1.CloudInitSpec{
 			Hostname: "my-hostname",
 			Packages: []string{"curl", "vim"},
 			Users: []v1.UserSpec{
 				{
 					Name: "admin",
 					Sudo: "ALL=(ALL) NOPASSWD:ALL",
-					SSHAuthorizedKeys: []string{
+					SshAuthorizedKeys: []string{
 						"ssh-ed25519 AAAA...",
 					},
 				},
@@ -534,10 +534,10 @@ func TestConvertVMSpec_ConvertsCloudInitCorrectly(t *testing.T) {
 func TestConvertVMSpec_HandlesNilCloudInit(t *testing.T) {
 	input := v1.VMSpec{
 		Memory:    512,
-		VCPUs:     1,
+		Vcpus:     1,
 		Network:   "test-net",
 		Disk:      v1.DiskSpec{Size: "10G"},
-		CloudInit: nil,
+		CloudInit: v1.CloudInitSpec{},
 	}
 
 	result := convertVMSpec(input)

@@ -3,7 +3,7 @@ module github.com/alexandremahdhaoui/testenv-vm
 go 1.25.0
 
 require (
-	github.com/alexandremahdhaoui/forge v0.23.0
+	github.com/alexandremahdhaoui/forge v0.30.0
 	github.com/digitalocean/go-libvirt v0.0.0-20251202224409-8b0babaf9393
 	github.com/modelcontextprotocol/go-sdk v1.1.0
 	github.com/stretchr/testify v1.11.1

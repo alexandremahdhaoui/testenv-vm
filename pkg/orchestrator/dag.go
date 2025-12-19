@@ -55,9 +55,9 @@ func NewDAG() *DAG {
 	}
 }
 
-// BuildDAG constructs a dependency graph from a TestenvSpec.
+// BuildDAG constructs a dependency graph from a Spec.
 // It scans all resources for template references and builds edges accordingly.
-func BuildDAG(testenvSpec *v1.TestenvSpec) (*DAG, error) {
+func BuildDAG(testenvSpec *v1.Spec) (*DAG, error) {
 	dag := NewDAG()
 
 	// Add image nodes first (Phase 0 - no dependencies)
@@ -89,7 +89,7 @@ func BuildDAG(testenvSpec *v1.TestenvSpec) (*DAG, error) {
 		dag.AddNode(ref)
 	}
 
-	for _, vm := range testenvSpec.VMs {
+	for _, vm := range testenvSpec.Vms {
 		ref := v1.ResourceRef{
 			Kind:     "vm",
 			Name:     vm.Name,
@@ -140,7 +140,7 @@ func BuildDAG(testenvSpec *v1.TestenvSpec) (*DAG, error) {
 	}
 
 	// VMs may depend on networks, keys, and other VMs
-	for _, vm := range testenvSpec.VMs {
+	for _, vm := range testenvSpec.Vms {
 		fromRef := v1.ResourceRef{Kind: "vm", Name: vm.Name, Provider: vm.Provider}
 		deps := spec.ExtractTemplateRefs(vm)
 		for _, dep := range deps {

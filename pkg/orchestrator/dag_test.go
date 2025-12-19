@@ -474,7 +474,7 @@ func TestDAG_Nodes(t *testing.T) {
 }
 
 func TestBuildDAG_EmptySpec(t *testing.T) {
-	spec := &v1.TestenvSpec{}
+	spec := &v1.Spec{}
 
 	dag, err := BuildDAG(spec)
 	if err != nil {
@@ -486,19 +486,19 @@ func TestBuildDAG_EmptySpec(t *testing.T) {
 }
 
 func TestBuildDAG_SimpleSpec(t *testing.T) {
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Keys: []v1.KeyResource{
 			{Name: "ssh-key", Spec: v1.KeySpec{Type: "ed25519"}},
 		},
 		Networks: []v1.NetworkResource{
-			{Name: "test-net", Kind: "bridge", Spec: v1.NetworkSpec{CIDR: "192.168.100.1/24"}},
+			{Name: "test-net", Kind: "bridge", Spec: v1.NetworkSpec{Cidr: "192.168.100.1/24"}},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name: "test-vm",
 				Spec: v1.VMSpec{
 					Memory:  1024,
-					VCPUs:   1,
+					Vcpus:   1,
 					Network: "test-net",
 				},
 			},
@@ -533,31 +533,31 @@ func TestBuildDAG_SimpleSpec(t *testing.T) {
 }
 
 func TestBuildDAG_WithTemplateDependencies(t *testing.T) {
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Keys: []v1.KeyResource{
 			{Name: "ssh-key", Spec: v1.KeySpec{Type: "ed25519"}},
 		},
 		Networks: []v1.NetworkResource{
-			{Name: "test-net", Kind: "bridge", Spec: v1.NetworkSpec{CIDR: "192.168.100.1/24"}},
+			{Name: "test-net", Kind: "bridge", Spec: v1.NetworkSpec{Cidr: "192.168.100.1/24"}},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name: "test-vm",
 				Spec: v1.VMSpec{
 					Memory:  1024,
-					VCPUs:   1,
+					Vcpus:   1,
 					Network: "test-net",
-					CloudInit: &v1.CloudInitSpec{
+					CloudInit: v1.CloudInitSpec{
 						Users: []v1.UserSpec{
 							{
 								Name: "test",
 								// Template reference to key
-								SSHAuthorizedKeys: []string{"{{ .Keys.ssh-key.PublicKey }}"},
+								SshAuthorizedKeys: []string{"{{ .Keys.ssh-key.PublicKey }}"},
 							},
 						},
 					},
-					Readiness: &v1.ReadinessSpec{
-						SSH: &v1.SSHReadinessSpec{
+					Readiness: v1.ReadinessSpec{
+						Ssh: v1.SSHReadinessSpec{
 							Enabled:    true,
 							Timeout:    "5m",
 							User:       "test",
@@ -588,9 +588,9 @@ func TestBuildDAG_WithTemplateDependencies(t *testing.T) {
 }
 
 func TestBuildDAG_NetworkAttachTo(t *testing.T) {
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Networks: []v1.NetworkResource{
-			{Name: "base-net", Kind: "bridge", Spec: v1.NetworkSpec{CIDR: "192.168.100.1/24"}},
+			{Name: "base-net", Kind: "bridge", Spec: v1.NetworkSpec{Cidr: "192.168.100.1/24"}},
 			{Name: "overlay-net", Kind: "dnsmasq", Spec: v1.NetworkSpec{AttachTo: "base-net"}},
 		},
 	}
@@ -678,11 +678,11 @@ func TestDAG_EdgeCount(t *testing.T) {
 
 func TestBuildDAG_VMWithTemplateNetwork(t *testing.T) {
 	// Test that network references containing templates are handled
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Networks: []v1.NetworkResource{
 			{Name: "base-net", Kind: "bridge"},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name: "test-vm",
 				Spec: v1.VMSpec{
@@ -709,7 +709,7 @@ func TestBuildDAG_VMWithTemplateNetwork(t *testing.T) {
 
 func TestBuildDAG_NetworkWithTemplateAttachTo(t *testing.T) {
 	// Test that attachTo containing templates is handled
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Networks: []v1.NetworkResource{
 			{Name: "base-net", Kind: "bridge"},
 			{
@@ -739,7 +739,7 @@ func TestBuildDAG_NetworkWithTemplateAttachTo(t *testing.T) {
 
 func TestBuildDAG_KeyWithNoTemplates(t *testing.T) {
 	// Keys typically don't have template dependencies
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Keys: []v1.KeyResource{
 			{Name: "key1", Spec: v1.KeySpec{Type: "ed25519"}},
 			{Name: "key2", Spec: v1.KeySpec{Type: "rsa", Bits: 4096}},
@@ -803,19 +803,19 @@ func TestDAG_HasCycle_LongChain(t *testing.T) {
 
 func TestBuildDAG_WithImages(t *testing.T) {
 	// Test that spec with images, keys, and VMs includes images in phase 0
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Images: []v1.ImageResource{
 			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
 		},
 		Keys: []v1.KeyResource{
 			{Name: "ssh-key", Spec: v1.KeySpec{Type: "ed25519"}},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name: "test-vm",
 				Spec: v1.VMSpec{
 					Memory: 1024,
-					VCPUs:  1,
+					Vcpus:  1,
 				},
 			},
 		},
@@ -859,16 +859,16 @@ func TestBuildDAG_WithImages(t *testing.T) {
 
 func TestBuildDAG_VMDependsOnImage(t *testing.T) {
 	// Test that VM with image template reference depends on the image
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Images: []v1.ImageResource{
 			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name: "test-vm",
 				Spec: v1.VMSpec{
 					Memory: 1024,
-					VCPUs:  1,
+					Vcpus:  1,
 					Disk: v1.DiskSpec{
 						BaseImage: "{{ .Images.ubuntu.Path }}",
 					},
@@ -922,7 +922,7 @@ func TestBuildDAG_VMDependsOnImage(t *testing.T) {
 
 func TestBuildDAG_ImageNoDependencies(t *testing.T) {
 	// Test that images have no dependencies
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Images: []v1.ImageResource{
 			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
 		},
@@ -963,7 +963,7 @@ func TestBuildDAG_ImageNoDependencies(t *testing.T) {
 
 func TestBuildDAG_MultipleImages(t *testing.T) {
 	// Test that multiple images are all in the same phase (parallel)
-	spec := &v1.TestenvSpec{
+	spec := &v1.Spec{
 		Images: []v1.ImageResource{
 			{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
 			{Name: "debian", Spec: v1.ImageSpec{Source: "debian:12"}},

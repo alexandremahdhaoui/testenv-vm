@@ -32,7 +32,6 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/client"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/client/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/orchestrator"
-	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -41,8 +40,6 @@ import (
 type TestEnv struct {
 	// ID is the unique test environment identifier.
 	ID string
-	// Spec is the parsed test environment specification.
-	Spec *v1.TestenvSpec
 	// Artifact is the output artifact from creation.
 	Artifact *v1.TestEnvArtifact
 	// State is the persisted environment state.
@@ -55,9 +52,13 @@ type TestEnv struct {
 	StateDir string
 }
 
-// loadScenario loads a YAML scenario file and returns the parsed TestenvSpec.
+// loadScenario loads a YAML scenario file and returns the parsed map.
 // The path is relative to the scenarios directory.
-func loadScenario(t *testing.T, scenarioName string) *v1.TestenvSpec {
+// Note: We parse YAML directly into a map (not v1.Spec) because:
+// 1. This matches how forge actually invokes engines (passing map)
+// 2. yaml.v3 uses lowercased field names by default, not json tags
+// 3. SpecFromMap expects camelCase keys from the original YAML
+func loadScenario(t *testing.T, scenarioName string) map[string]any {
 	t.Helper()
 
 	// Get the path to the scenarios directory
@@ -69,12 +70,12 @@ func loadScenario(t *testing.T, scenarioName string) *v1.TestenvSpec {
 		t.Fatalf("failed to read scenario file %s: %v", scenarioPath, err)
 	}
 
-	testenvSpec, err := spec.Parse(data)
-	if err != nil {
+	var specMap map[string]any
+	if err := yaml.Unmarshal(data, &specMap); err != nil {
 		t.Fatalf("failed to parse scenario file %s: %v", scenarioPath, err)
 	}
 
-	return testenvSpec
+	return specMap
 }
 
 // getScenarioDir returns the absolute path to the scenarios directory.
@@ -104,9 +105,9 @@ func getScenarioDir(t *testing.T) string {
 	return ""
 }
 
-// createTestenv creates a test environment from a spec.
+// createTestenv creates a test environment from a spec map.
 // It returns a TestEnv struct containing all information about the created environment.
-func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
+func createTestenv(t *testing.T, specMap map[string]any) *TestEnv {
 	t.Helper()
 
 	// Generate a unique test ID
@@ -126,7 +127,7 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 
 	// Fix provider engine paths to be absolute
 	projectRoot := getProjectRoot(t)
-	fixProviderPaths(testenvSpec, projectRoot)
+	fixProviderPaths(specMap, projectRoot)
 
 	// Create orchestrator with configuration
 	imageCacheDir := filepath.Join(tmpDir, "images")
@@ -137,12 +138,6 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 	})
 	if err != nil {
 		t.Fatalf("failed to create orchestrator: %v", err)
-	}
-
-	// Convert spec to map for CreateInput
-	specMap, err := specToMap(testenvSpec)
-	if err != nil {
-		t.Fatalf("failed to convert spec to map: %v", err)
 	}
 
 	// Create the test environment
@@ -168,7 +163,6 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 
 	return &TestEnv{
 		ID:       testID,
-		Spec:     testenvSpec,
 		Artifact: result.Artifact,
 		Orch:     orch,
 		TmpDir:   tmpDir,
@@ -178,12 +172,23 @@ func createTestenv(t *testing.T, testenvSpec *v1.TestenvSpec) *TestEnv {
 
 // fixProviderPaths converts relative provider engine paths to absolute paths.
 // This is necessary because the tests may run from different working directories.
-func fixProviderPaths(testenvSpec *v1.TestenvSpec, projectRoot string) {
-	for i := range testenvSpec.Providers {
-		engine := testenvSpec.Providers[i].Engine
+func fixProviderPaths(specMap map[string]any, projectRoot string) {
+	providers, ok := specMap["providers"].([]any)
+	if !ok {
+		return
+	}
+	for _, p := range providers {
+		provider, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		engine, ok := provider["engine"].(string)
+		if !ok {
+			continue
+		}
 		// Check if it's a relative path (starts with ./)
 		if len(engine) > 2 && engine[:2] == "./" {
-			testenvSpec.Providers[i].Engine = filepath.Join(projectRoot, engine[2:])
+			provider["engine"] = filepath.Join(projectRoot, engine[2:])
 		}
 	}
 }
@@ -252,23 +257,6 @@ func getProjectRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-}
-
-// specToMap converts a TestenvSpec to a map[string]any for use in CreateInput.
-func specToMap(testenvSpec *v1.TestenvSpec) (map[string]any, error) {
-	// Use YAML marshal/unmarshal to convert struct to map
-	// This is the same approach used in the spec package
-	data, err := yaml.Marshal(testenvSpec)
-	if err != nil {
-		return nil, err
-	}
-
-	var m map[string]any
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-
-	return m, nil
 }
 
 // getVM retrieves VM state from the test environment by name.

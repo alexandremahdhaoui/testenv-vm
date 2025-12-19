@@ -63,7 +63,7 @@ func NewExecutor(manager *provider.Manager, store *state.Store, imageMgr *image.
 // The templatedFields parameter indicates which fields need Phase 2 validation after rendering.
 func (e *Executor) ExecuteCreate(
 	ctx context.Context,
-	spec *v1.TestenvSpec,
+	spec *v1.Spec,
 	plan [][]v1.ResourceRef,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
@@ -185,7 +185,7 @@ func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentSt
 func (e *Executor) executePhase(
 	ctx context.Context,
 	phase []v1.ResourceRef,
-	spec *v1.TestenvSpec,
+	spec *v1.Spec,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
 	templatedFields *specpkg.TemplatedFields,
@@ -216,7 +216,7 @@ func (e *Executor) executePhase(
 func (e *Executor) createResource(
 	ctx context.Context,
 	ref v1.ResourceRef,
-	spec *v1.TestenvSpec,
+	spec *v1.Spec,
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
 	templatedFields *specpkg.TemplatedFields,
@@ -469,7 +469,7 @@ func (e *Executor) deleteResource(
 }
 
 // findKeySpec finds a key resource by name in the spec.
-func (e *Executor) findKeySpec(spec *v1.TestenvSpec, name string) (*v1.KeyResource, error) {
+func (e *Executor) findKeySpec(spec *v1.Spec, name string) (*v1.KeyResource, error) {
 	for i := range spec.Keys {
 		if spec.Keys[i].Name == name {
 			return &spec.Keys[i], nil
@@ -479,7 +479,7 @@ func (e *Executor) findKeySpec(spec *v1.TestenvSpec, name string) (*v1.KeyResour
 }
 
 // findNetworkSpec finds a network resource by name in the spec.
-func (e *Executor) findNetworkSpec(spec *v1.TestenvSpec, name string) (*v1.NetworkResource, error) {
+func (e *Executor) findNetworkSpec(spec *v1.Spec, name string) (*v1.NetworkResource, error) {
 	for i := range spec.Networks {
 		if spec.Networks[i].Name == name {
 			return &spec.Networks[i], nil
@@ -489,17 +489,17 @@ func (e *Executor) findNetworkSpec(spec *v1.TestenvSpec, name string) (*v1.Netwo
 }
 
 // findVMSpec finds a VM resource by name in the spec.
-func (e *Executor) findVMSpec(spec *v1.TestenvSpec, name string) (*v1.VMResource, error) {
-	for i := range spec.VMs {
-		if spec.VMs[i].Name == name {
-			return &spec.VMs[i], nil
+func (e *Executor) findVMSpec(spec *v1.Spec, name string) (*v1.VMResource, error) {
+	for i := range spec.Vms {
+		if spec.Vms[i].Name == name {
+			return &spec.Vms[i], nil
 		}
 	}
 	return nil, fmt.Errorf("vm resource %q not found in spec", name)
 }
 
 // findImageSpec finds an image resource by name in the spec.
-func (e *Executor) findImageSpec(spec *v1.TestenvSpec, name string) (*v1.ImageResource, error) {
+func (e *Executor) findImageSpec(spec *v1.Spec, name string) (*v1.ImageResource, error) {
 	for i := range spec.Images {
 		if spec.Images[i].Name == name {
 			return &spec.Images[i], nil
@@ -571,33 +571,37 @@ func (e *Executor) renderVMSpec(original *v1.VMResource, templateCtx *specpkg.Te
 // convertNetworkSpec converts v1.NetworkSpec to providerv1.NetworkSpec.
 func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpec {
 	result := providerv1.NetworkSpec{
-		CIDR:     spec.CIDR,
+		CIDR:     spec.Cidr,
 		Gateway:  spec.Gateway,
 		AttachTo: spec.AttachTo,
-		MTU:      spec.MTU,
+		MTU:      spec.Mtu,
 	}
 
-	if spec.DHCP != nil {
+	// DHCP, DNS, TFTP are value types in generated code.
+	// If DHCP was explicitly specified (any field set), pass it to provider.
+	// If DHCP is completely unset (zero value), pass nil to let provider use its default (enabled).
+	if spec.Dhcp.Enabled || spec.Dhcp.RangeStart != "" || spec.Dhcp.RangeEnd != "" || spec.Dhcp.LeaseTime != "" {
 		result.DHCP = &providerv1.DHCPSpec{
-			Enabled:    spec.DHCP.Enabled,
-			RangeStart: spec.DHCP.RangeStart,
-			RangeEnd:   spec.DHCP.RangeEnd,
-			LeaseTime:  spec.DHCP.LeaseTime,
+			Enabled:    spec.Dhcp.Enabled,
+			RangeStart: spec.Dhcp.RangeStart,
+			RangeEnd:   spec.Dhcp.RangeEnd,
+			LeaseTime:  spec.Dhcp.LeaseTime,
 		}
 	}
+	// If DHCP is completely unset, result.DHCP remains nil and provider will default to enabled
 
-	if spec.DNS != nil {
+	if spec.Dns.Enabled || len(spec.Dns.Servers) > 0 {
 		result.DNS = &providerv1.DNSSpec{
-			Enabled: spec.DNS.Enabled,
-			Servers: spec.DNS.Servers,
+			Enabled: spec.Dns.Enabled,
+			Servers: spec.Dns.Servers,
 		}
 	}
 
-	if spec.TFTP != nil {
+	if spec.Tftp.Enabled || spec.Tftp.Root != "" || spec.Tftp.BootFile != "" {
 		result.TFTP = &providerv1.TFTPSpec{
-			Enabled:  spec.TFTP.Enabled,
-			Root:     spec.TFTP.Root,
-			BootFile: spec.TFTP.BootFile,
+			Enabled:  spec.Tftp.Enabled,
+			Root:     spec.Tftp.Root,
+			BootFile: spec.Tftp.BootFile,
 		}
 	}
 
@@ -606,21 +610,29 @@ func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpe
 
 // convertVMSpec converts v1.VMSpec to providerv1.VMSpec.
 func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
+	// Ensure boot order is non-nil (JSON serialization requires array, not null)
+	bootOrder := spec.Boot.Order
+	if bootOrder == nil {
+		bootOrder = []string{}
+	}
+
 	result := providerv1.VMSpec{
 		Memory:  spec.Memory,
-		VCPUs:   spec.VCPUs,
+		VCPUs:   spec.Vcpus,
 		Network: spec.Network,
 		Disk: providerv1.DiskSpec{
 			BaseImage: spec.Disk.BaseImage,
 			Size:      spec.Disk.Size,
 		},
 		Boot: providerv1.BootSpec{
-			Order:    spec.Boot.Order,
+			Order:    bootOrder,
 			Firmware: spec.Boot.Firmware,
 		},
 	}
 
-	if spec.CloudInit != nil {
+	// CloudInit is a value type in generated code, check if any fields are set
+	if spec.CloudInit.Hostname != "" || len(spec.CloudInit.Users) > 0 || len(spec.CloudInit.Packages) > 0 ||
+		len(spec.CloudInit.Runcmd) > 0 || len(spec.CloudInit.WriteFiles) > 0 || len(spec.CloudInit.NetworkConfig.Ethernets) > 0 {
 		result.CloudInit = &providerv1.CloudInitSpec{
 			Hostname: spec.CloudInit.Hostname,
 			Packages: spec.CloudInit.Packages,
@@ -630,7 +642,7 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 			result.CloudInit.Users = append(result.CloudInit.Users, providerv1.UserSpec{
 				Name:              u.Name,
 				Sudo:              u.Sudo,
-				SSHAuthorizedKeys: u.SSHAuthorizedKeys,
+				SSHAuthorizedKeys: u.SshAuthorizedKeys,
 			})
 		}
 		for _, wf := range spec.CloudInit.WriteFiles {
@@ -640,17 +652,19 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 				Permissions: wf.Permissions,
 			})
 		}
-		// Convert network config if present
-		if spec.CloudInit.NetworkConfig != nil {
+		// Convert network config if ethernets are present
+		if len(spec.CloudInit.NetworkConfig.Ethernets) > 0 {
 			result.CloudInit.NetworkConfig = &providerv1.CloudInitNetworkConfig{}
 			for _, eth := range spec.CloudInit.NetworkConfig.Ethernets {
+				dhcp4 := eth.Dhcp4 // Create a local variable for the pointer
 				providerEth := providerv1.CloudInitEthernetConfig{
 					Name:      eth.Name,
-					DHCP4:     eth.DHCP4,
+					DHCP4:     &dhcp4,
 					Addresses: eth.Addresses,
 					Gateway4:  eth.Gateway4,
 				}
-				if eth.Nameservers != nil {
+				// Nameservers is a value type, check if addresses are set
+				if len(eth.Nameservers.Addresses) > 0 {
 					providerEth.Nameservers = &providerv1.CloudInitNameservers{
 						Addresses: eth.Nameservers.Addresses,
 					}
@@ -660,13 +674,14 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		}
 	}
 
-	if spec.Readiness != nil && spec.Readiness.SSH != nil {
+	// Readiness.Ssh is a value type, check if enabled
+	if spec.Readiness.Ssh.Enabled {
 		result.Readiness = &providerv1.ReadinessSpec{
 			SSH: &providerv1.SSHReadinessSpec{
-				Enabled:    spec.Readiness.SSH.Enabled,
-				Timeout:    spec.Readiness.SSH.Timeout,
-				User:       spec.Readiness.SSH.User,
-				PrivateKey: spec.Readiness.SSH.PrivateKey,
+				Enabled:    spec.Readiness.Ssh.Enabled,
+				Timeout:    spec.Readiness.Ssh.Timeout,
+				User:       spec.Readiness.Ssh.User,
+				PrivateKey: spec.Readiness.Ssh.PrivateKey,
 			},
 		}
 	}

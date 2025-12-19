@@ -278,13 +278,15 @@ func TestCleanup(t *testing.T) {
 func TestCleanupOnFailure(t *testing.T) {
 	// Create an invalid spec that will fail during creation
 	// Use basic_vm.yaml as a base but modify it to cause a failure
-	spec := loadScenario(t, "basic_vm.yaml")
+	specMap := loadScenario(t, "basic_vm.yaml")
 
 	// Make the provider reference invalid to cause a failure
 	// This should trigger a rollback of any resources created before the failure
-	if len(spec.Providers) > 0 {
-		// Set the engine to a non-existent binary path
-		spec.Providers[0].Engine = "/nonexistent/path/to/provider"
+	if providers, ok := specMap["providers"].([]any); ok && len(providers) > 0 {
+		if provider, ok := providers[0].(map[string]any); ok {
+			// Set the engine to a non-existent binary path
+			provider["engine"] = "/nonexistent/path/to/provider"
+		}
 	}
 
 	// Generate a unique test ID
@@ -306,12 +308,6 @@ func TestCleanupOnFailure(t *testing.T) {
 		t.Fatalf("failed to create orchestrator: %v", err)
 	}
 	defer orch.Close()
-
-	// Convert spec to map
-	specMap, err := specToMap(spec)
-	if err != nil {
-		t.Fatalf("failed to convert spec to map: %v", err)
-	}
 
 	// Try to create - should fail
 	ctx := context.Background()

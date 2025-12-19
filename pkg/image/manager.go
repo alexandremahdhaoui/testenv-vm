@@ -104,8 +104,8 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 	if isWellKnown {
 		resolvedURL = wellKnown.URL
 		// Use user-provided SHA256 if set, otherwise use registry's (which may be empty)
-		if spec.SHA256 != "" {
-			expectedSHA256 = spec.SHA256
+		if spec.Sha256 != "" {
+			expectedSHA256 = spec.Sha256
 		} else {
 			expectedSHA256 = wellKnown.SHA256
 		}
@@ -115,7 +115,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 			return nil, fmt.Errorf("direct URL must use HTTPS: %s", source)
 		}
 		resolvedURL = source
-		expectedSHA256 = spec.SHA256
+		expectedSHA256 = spec.Sha256
 	}
 
 	// Compute cache key from source

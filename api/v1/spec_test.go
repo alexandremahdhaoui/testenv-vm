@@ -22,15 +22,15 @@ import (
 	"testing"
 )
 
-func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
+func TestSpec_JSONRoundtrip(t *testing.T) {
 	cleanupOnFailure := true
 	tests := []struct {
 		name string
-		spec TestenvSpec
+		spec Spec
 	}{
 		{
 			name: "minimal spec",
-			spec: TestenvSpec{
+			spec: Spec{
 				Providers: []ProviderConfig{
 					{Name: "stub", Engine: "go://cmd/providers/stub"},
 				},
@@ -38,10 +38,10 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 		},
 		{
 			name: "full spec",
-			spec: TestenvSpec{
+			spec: Spec{
 				StateDir:         "/tmp/state",
 				ArtifactDir:      "/tmp/artifacts",
-				CleanupOnFailure: &cleanupOnFailure,
+				CleanupOnFailure: cleanupOnFailure,
 				Providers: []ProviderConfig{
 					{
 						Name:    "stub",
@@ -70,20 +70,20 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 						Kind:     "bridge",
 						Provider: "stub",
 						Spec: NetworkSpec{
-							CIDR:    "192.168.100.0/24",
+							Cidr:    "192.168.100.0/24",
 							Gateway: "192.168.100.1",
-							MTU:     1500,
-							DHCP: &DHCPSpec{
+							Mtu:     1500,
+							Dhcp: DHCPSpec{
 								Enabled:    true,
 								RangeStart: "192.168.100.10",
 								RangeEnd:   "192.168.100.100",
 								LeaseTime:  "12h",
 							},
-							DNS: &DNSSpec{
+							Dns: DNSSpec{
 								Enabled: true,
 								Servers: []string{"8.8.8.8"},
 							},
-							TFTP: &TFTPSpec{
+							Tftp: TFTPSpec{
 								Enabled:  true,
 								Root:     "/var/tftp",
 								BootFile: "undionly.kpxe",
@@ -91,13 +91,13 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 						},
 					},
 				},
-				VMs: []VMResource{
+				Vms: []VMResource{
 					{
 						Name:     "test-vm",
 						Provider: "stub",
 						Spec: VMSpec{
 							Memory:  2048,
-							VCPUs:   2,
+							Vcpus:   2,
 							Network: "test-net",
 							Disk: DiskSpec{
 								BaseImage: "/images/ubuntu.qcow2",
@@ -107,19 +107,19 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 								Order:    []string{"hd", "network"},
 								Firmware: "uefi",
 							},
-							CloudInit: &CloudInitSpec{
+							CloudInit: CloudInitSpec{
 								Hostname: "test-vm",
 								Users: []UserSpec{
 									{
 										Name:              "ubuntu",
 										Sudo:              "ALL=(ALL) NOPASSWD:ALL",
-										SSHAuthorizedKeys: []string{"ssh-ed25519 AAAA..."},
+										SshAuthorizedKeys: []string{"ssh-ed25519 AAAA..."},
 									},
 								},
 								Packages: []string{"vim", "curl"},
 							},
-							Readiness: &ReadinessSpec{
-								SSH: &SSHReadinessSpec{
+							Readiness: ReadinessSpec{
+								Ssh: SSHReadinessSpec{
 									Enabled:    true,
 									Timeout:    "5m",
 									User:       "ubuntu",
@@ -142,7 +142,7 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 			}
 
 			// Unmarshal back
-			var got TestenvSpec
+			var got Spec
 			if err := json.Unmarshal(data, &got); err != nil {
 				t.Fatalf("Unmarshal failed: %v", err)
 			}
@@ -155,19 +155,19 @@ func TestTestenvSpec_JSONRoundtrip(t *testing.T) {
 	}
 }
 
-func TestTestenvSpec_JSONFieldNames(t *testing.T) {
-	cleanupOnFailure := false
-	spec := TestenvSpec{
+func TestSpec_JSONFieldNames(t *testing.T) {
+	// Note: CleanupOnFailure must be true to appear in JSON (omitempty on bool)
+	spec := Spec{
 		StateDir:         "/state",
 		ArtifactDir:      "/artifacts",
-		CleanupOnFailure: &cleanupOnFailure,
+		CleanupOnFailure: true,
 		Providers: []ProviderConfig{
 			{Name: "p1", Engine: "e1", Default: true},
 		},
 		DefaultProvider: "p1",
 		Keys:            []KeyResource{{Name: "k1", Spec: KeySpec{Type: "rsa"}}},
 		Networks:        []NetworkResource{{Name: "n1", Kind: "bridge", Spec: NetworkSpec{}}},
-		VMs:             []VMResource{{Name: "v1", Spec: VMSpec{Memory: 1024, VCPUs: 1, Disk: DiskSpec{Size: "10G"}, Boot: BootSpec{Order: []string{"hd"}}}}},
+		Vms:             []VMResource{{Name: "v1", Spec: VMSpec{Memory: 1024, Vcpus: 1, Disk: DiskSpec{Size: "10G"}, Boot: BootSpec{Order: []string{"hd"}}}}},
 	}
 
 	data, err := json.Marshal(spec)

@@ -406,18 +406,18 @@ func TestRenderSpec(t *testing.T) {
 
 func TestExtractTemplateRefs(t *testing.T) {
 	t.Run("finds key references", func(t *testing.T) {
-		spec := &v1.TestenvSpec{
-			VMs: []v1.VMResource{
+		spec := &v1.Spec{
+			Vms: []v1.VMResource{
 				{
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  2,
-						CloudInit: &v1.CloudInitSpec{
+						Vcpus:  2,
+						CloudInit: v1.CloudInitSpec{
 							Users: []v1.UserSpec{
 								{
 									Name:              "ubuntu",
-									SSHAuthorizedKeys: []string{"{{ .Keys.my-key.PublicKey }}"},
+									SshAuthorizedKeys: []string{"{{ .Keys.my-key.PublicKey }}"},
 								},
 							},
 						},
@@ -441,7 +441,7 @@ func TestExtractTemplateRefs(t *testing.T) {
 	})
 
 	t.Run("finds network references", func(t *testing.T) {
-		spec := &v1.TestenvSpec{
+		spec := &v1.Spec{
 			Networks: []v1.NetworkResource{
 				{
 					Name: "net2",
@@ -592,8 +592,8 @@ func TestExtractTemplateRefs(t *testing.T) {
 		}
 	})
 
-	t.Run("handles TestenvSpec with providerSpec maps", func(t *testing.T) {
-		spec := &v1.TestenvSpec{
+	t.Run("handles Spec with providerSpec maps", func(t *testing.T) {
+		spec := &v1.Spec{
 			Providers: []v1.ProviderConfig{
 				{Name: "p1", Engine: "test"},
 			},

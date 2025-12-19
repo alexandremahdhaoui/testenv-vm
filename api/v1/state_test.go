@@ -46,7 +46,7 @@ func TestEnvironmentState_JSONRoundtrip(t *testing.T) {
 				Status:    StatusReady,
 				CreatedAt: "2024-01-01T00:00:00Z",
 				UpdatedAt: "2024-01-01T01:00:00Z",
-				Spec: &TestenvSpec{
+				Spec: &Spec{
 					StateDir: "/tmp/state",
 					Providers: []ProviderConfig{
 						{Name: "stub", Engine: "go://stub"},

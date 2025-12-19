@@ -38,7 +38,6 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/client"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/client/provider"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/orchestrator"
-	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -47,16 +46,6 @@ const (
 	defaultImageName = "ubuntu-24.04-server-cloudimg-amd64.img"
 	defaultImageURL  = "https://cloud-images.ubuntu.com/releases/noble/release/" + defaultImageName
 )
-
-// TestEnv wraps a test environment with its resources and state.
-type TestEnv struct {
-	ID       string
-	Spec     *v1.TestenvSpec
-	Artifact *v1.TestEnvArtifact
-	Orch     *orchestrator.Orchestrator
-	TmpDir   string
-	StateDir string
-}
 
 // checkLibvirtAvailable checks if libvirt and required tools are available.
 func checkLibvirtAvailable(t *testing.T) {
@@ -159,24 +148,32 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 	// Ensure base image is available
 	baseImage := ensureBaseImage(t)
 
-	// Load scenario
+	// Load scenario directly into map (mimics how forge calls engines)
+	// Note: We parse YAML to map directly, NOT to v1.Spec, because:
+	// 1. This matches how forge actually invokes engines (passing map)
+	// 2. yaml.v3 uses lowercased field names by default, not json tags
 	scenarioPath := filepath.Join(getProjectRoot(t), "test", "e2e", "scenarios", "libvirt_vm.yaml")
 	data, err := os.ReadFile(scenarioPath)
 	if err != nil {
 		t.Fatalf("failed to read scenario: %v", err)
 	}
 
-	testenvSpec, err := spec.Parse(data)
-	if err != nil {
+	var specMap map[string]any
+	if err := yaml.Unmarshal(data, &specMap); err != nil {
 		t.Fatalf("failed to parse scenario: %v", err)
 	}
 
-	// Fix provider paths
+	// Fix provider paths in the map
 	projectRoot := getProjectRoot(t)
-	for i := range testenvSpec.Providers {
-		engine := testenvSpec.Providers[i].Engine
-		if len(engine) > 2 && engine[:2] == "./" {
-			testenvSpec.Providers[i].Engine = filepath.Join(projectRoot, engine[2:])
+	if providers, ok := specMap["providers"].([]any); ok {
+		for _, p := range providers {
+			if provider, ok := p.(map[string]any); ok {
+				if engine, ok := provider["engine"].(string); ok {
+					if len(engine) > 2 && engine[:2] == "./" {
+						provider["engine"] = filepath.Join(projectRoot, engine[2:])
+					}
+				}
+			}
 		}
 	}
 
@@ -202,12 +199,6 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 		t.Fatalf("failed to create orchestrator: %v", err)
 	}
 	defer orch.Close()
-
-	// Convert spec to map
-	specMap, err := specToMap(testenvSpec)
-	if err != nil {
-		t.Fatalf("failed to convert spec: %v", err)
-	}
 
 	// Create test environment
 	testID := "e2e-libvirt-" + time.Now().Format("20060102-150405")
@@ -424,14 +415,3 @@ func getProjectRoot(t *testing.T) string {
 	}
 }
 
-func specToMap(s *v1.TestenvSpec) (map[string]any, error) {
-	data, err := yaml.Marshal(s)
-	if err != nil {
-		return nil, err
-	}
-	var m map[string]any
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}

@@ -55,12 +55,12 @@ func NewTemplatedFields() *TemplatedFields {
 	}
 }
 
-// ValidateEarly performs Phase 1 validation on a TestenvSpec.
+// ValidateEarly performs Phase 1 validation on a Spec.
 // It validates structure, syntax, and verifies template references point to
 // resources that exist in the spec. Templated fields are marked for Phase 2
 // validation after template rendering.
 // Returns TemplatedFields indicating which fields need Phase 2 validation.
-func ValidateEarly(spec *v1.TestenvSpec) (*TemplatedFields, error) {
+func ValidateEarly(spec *v1.Spec) (*TemplatedFields, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("spec cannot be nil")
 	}
@@ -103,7 +103,7 @@ func ValidateEarly(spec *v1.TestenvSpec) (*TemplatedFields, error) {
 	}
 
 	// Validate VMs
-	if err := ValidateVMs(spec.VMs); err != nil {
+	if err := ValidateVMs(spec.Vms); err != nil {
 		return nil, fmt.Errorf("vms validation failed: %w", err)
 	}
 
@@ -131,11 +131,11 @@ func ValidateEarly(spec *v1.TestenvSpec) (*TemplatedFields, error) {
 	return templatedFields, nil
 }
 
-// Validate validates an entire TestenvSpec.
+// Validate validates an entire Spec.
 // This is a convenience wrapper around ValidateEarly that discards the
 // TemplatedFields information. Use ValidateEarly directly if you need
 // to know which fields require Phase 2 validation.
-func Validate(spec *v1.TestenvSpec) error {
+func Validate(spec *v1.Spec) error {
 	_, err := ValidateEarly(spec)
 	return err
 }
@@ -245,7 +245,7 @@ func ValidateNetworks(networks []v1.NetworkResource) error {
 		seen[n.Name] = true
 
 		// If DHCP is enabled, CIDR is required
-		if n.Spec.DHCP != nil && n.Spec.DHCP.Enabled && n.Spec.CIDR == "" {
+		if n.Spec.Dhcp.Enabled && n.Spec.Cidr == "" {
 			return fmt.Errorf("network %q: cidr is required when DHCP is enabled", n.Name)
 		}
 	}
@@ -279,8 +279,8 @@ func ValidateVMs(vms []v1.VMResource) error {
 		}
 
 		// Validate VCPUs is positive
-		if vm.Spec.VCPUs <= 0 {
-			return fmt.Errorf("vm %q: vcpus must be a positive value (got %d)", vm.Name, vm.Spec.VCPUs)
+		if vm.Spec.Vcpus <= 0 {
+			return fmt.Errorf("vm %q: vcpus must be a positive value (got %d)", vm.Name, vm.Spec.Vcpus)
 		}
 	}
 
@@ -289,7 +289,7 @@ func ValidateVMs(vms []v1.VMResource) error {
 
 // validateProviderRefs validates that all provider references in resources
 // refer to existing provider names.
-func validateProviderRefs(spec *v1.TestenvSpec, providerNames map[string]bool) error {
+func validateProviderRefs(spec *v1.Spec, providerNames map[string]bool) error {
 	// Check keys
 	for _, k := range spec.Keys {
 		if k.Provider != "" && !providerNames[k.Provider] {
@@ -305,7 +305,7 @@ func validateProviderRefs(spec *v1.TestenvSpec, providerNames map[string]bool) e
 	}
 
 	// Check VMs
-	for _, vm := range spec.VMs {
+	for _, vm := range spec.Vms {
 		if vm.Provider != "" && !providerNames[vm.Provider] {
 			return fmt.Errorf("vm %q: provider %q not found", vm.Name, vm.Provider)
 		}
@@ -317,7 +317,7 @@ func validateProviderRefs(spec *v1.TestenvSpec, providerNames map[string]bool) e
 // validateResourceRefs validates cross-references between resources.
 // It checks that network.AttachTo and vm.Network reference existing networks.
 // Templated fields are skipped and marked in templatedFields for Phase 2 validation.
-func validateResourceRefs(spec *v1.TestenvSpec, templatedFields *TemplatedFields) error {
+func validateResourceRefs(spec *v1.Spec, templatedFields *TemplatedFields) error {
 	// Build network name set
 	networkNames := make(map[string]bool)
 	for _, n := range spec.Networks {
@@ -343,7 +343,7 @@ func validateResourceRefs(spec *v1.TestenvSpec, templatedFields *TemplatedFields
 	}
 
 	// Check VM network references
-	for _, vm := range spec.VMs {
+	for _, vm := range spec.Vms {
 		if vm.Spec.Network != "" {
 			if IsTemplated(vm.Spec.Network) {
 				// Mark for Phase 2 validation
@@ -368,7 +368,7 @@ func validateResourceRefs(spec *v1.TestenvSpec, templatedFields *TemplatedFields
 // - Custom URLs (non-well-known) require SHA256 checksum
 // - No duplicate image names
 // - Aliases don't conflict with other names/aliases
-func validateImages(spec *v1.TestenvSpec) error {
+func validateImages(spec *v1.Spec) error {
 	seen := make(map[string]bool)      // tracks image names
 	aliases := make(map[string]string) // maps alias -> image name that owns it
 
@@ -396,7 +396,7 @@ func validateImages(spec *v1.TestenvSpec) error {
 				return fmt.Errorf("image %q: source %q must be well-known reference or HTTPS URL", img.Name, img.Spec.Source)
 			}
 			// Custom HTTPS URLs require SHA256 checksum
-			if img.Spec.SHA256 == "" {
+			if img.Spec.Sha256 == "" {
 				return fmt.Errorf("image %q: custom URL requires sha256 checksum", img.Name)
 			}
 		}
@@ -438,7 +438,7 @@ func validateImages(spec *v1.TestenvSpec) error {
 // point to resources that actually exist in the spec. This catches typos like
 // {{ .Networks.typo.InterfaceName }} early, before any resources are created.
 // Note: .Env references are skipped as they come from runtime input.
-func validateTemplateRefsExist(spec *v1.TestenvSpec) error {
+func validateTemplateRefsExist(spec *v1.Spec) error {
 	// Build resource name sets
 	keyNames := make(map[string]bool)
 	for _, k := range spec.Keys {
@@ -449,7 +449,7 @@ func validateTemplateRefsExist(spec *v1.TestenvSpec) error {
 		networkNames[n.Name] = true
 	}
 	vmNames := make(map[string]bool)
-	for _, vm := range spec.VMs {
+	for _, vm := range spec.Vms {
 		vmNames[vm.Name] = true
 	}
 	// Build image names set (include both name and alias)
@@ -502,7 +502,7 @@ func ValidateResourceRefsLate(
 	resourceKind string,
 	resourceName string,
 	renderedSpec interface{},
-	fullSpec *v1.TestenvSpec,
+	fullSpec *v1.Spec,
 	templatedFields *TemplatedFields,
 ) error {
 	if templatedFields == nil {

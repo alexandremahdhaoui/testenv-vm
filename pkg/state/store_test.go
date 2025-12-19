@@ -552,7 +552,7 @@ func TestStateWithComplexSpec(t *testing.T) {
 	store := NewStore(tmpDir)
 
 	state := createTestState("complex-spec")
-	state.Spec = &v1.TestenvSpec{
+	state.Spec = &v1.Spec{
 		Providers: []v1.ProviderConfig{
 			{
 				Name:    "stub",
@@ -575,17 +575,17 @@ func TestStateWithComplexSpec(t *testing.T) {
 				Kind:     "bridge",
 				Provider: "stub",
 				Spec: v1.NetworkSpec{
-					CIDR: "192.168.100.1/24",
+					Cidr: "192.168.100.1/24",
 				},
 			},
 		},
-		VMs: []v1.VMResource{
+		Vms: []v1.VMResource{
 			{
 				Name:     "test-vm",
 				Provider: "stub",
 				Spec: v1.VMSpec{
 					Memory: 1024,
-					VCPUs:  2,
+					Vcpus:  2,
 					Disk: v1.DiskSpec{
 						Size: "20G",
 					},

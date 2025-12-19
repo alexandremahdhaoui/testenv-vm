@@ -83,7 +83,7 @@ func TestExecutor_ExecuteCreate_NilState(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	ctx := context.Background()
-	testenvSpec := &v1.TestenvSpec{}
+	testenvSpec := &v1.Spec{}
 
 	_, err := executor.ExecuteCreate(ctx, testenvSpec, nil, nil, nil, nil)
 	if err == nil {
@@ -95,7 +95,7 @@ func TestExecutor_ExecuteCreate_EmptyPlan(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	ctx := context.Background()
-	testenvSpec := &v1.TestenvSpec{}
+	testenvSpec := &v1.Spec{}
 	envState := &v1.EnvironmentState{
 		ID:     "test-1",
 		Status: v1.StatusCreating,
@@ -184,7 +184,7 @@ func TestExecutor_ExecuteDelete_ReversePhaseOrder(t *testing.T) {
 func TestExecutor_findKeySpec(t *testing.T) {
 	executor := newTestExecutor(t)
 
-	testenvSpec := &v1.TestenvSpec{
+	testenvSpec := &v1.Spec{
 		Keys: []v1.KeyResource{
 			{Name: "key1", Spec: v1.KeySpec{Type: "ed25519"}},
 			{Name: "key2", Spec: v1.KeySpec{Type: "rsa", Bits: 4096}},
@@ -232,10 +232,10 @@ func TestExecutor_findKeySpec(t *testing.T) {
 func TestExecutor_findNetworkSpec(t *testing.T) {
 	executor := newTestExecutor(t)
 
-	testenvSpec := &v1.TestenvSpec{
+	testenvSpec := &v1.Spec{
 		Networks: []v1.NetworkResource{
-			{Name: "net1", Kind: "bridge", Spec: v1.NetworkSpec{CIDR: "192.168.1.0/24"}},
-			{Name: "net2", Kind: "dnsmasq", Spec: v1.NetworkSpec{CIDR: "192.168.2.0/24"}},
+			{Name: "net1", Kind: "bridge", Spec: v1.NetworkSpec{Cidr: "192.168.1.0/24"}},
+			{Name: "net2", Kind: "dnsmasq", Spec: v1.NetworkSpec{Cidr: "192.168.2.0/24"}},
 		},
 	}
 
@@ -275,10 +275,10 @@ func TestExecutor_findNetworkSpec(t *testing.T) {
 func TestExecutor_findVMSpec(t *testing.T) {
 	executor := newTestExecutor(t)
 
-	testenvSpec := &v1.TestenvSpec{
-		VMs: []v1.VMResource{
-			{Name: "vm1", Spec: v1.VMSpec{Memory: 1024, VCPUs: 1}},
-			{Name: "vm2", Spec: v1.VMSpec{Memory: 2048, VCPUs: 2}},
+	testenvSpec := &v1.Spec{
+		Vms: []v1.VMResource{
+			{Name: "vm1", Spec: v1.VMSpec{Memory: 1024, Vcpus: 1}},
+			{Name: "vm2", Spec: v1.VMSpec{Memory: 2048, Vcpus: 2}},
 		},
 	}
 
@@ -692,7 +692,7 @@ func TestExecutor_renderNetworkSpec(t *testing.T) {
 		Provider: "test",
 		Spec: v1.NetworkSpec{
 			AttachTo: "{{ .Networks.base.InterfaceName }}",
-			CIDR:     "192.168.1.0/24",
+			Cidr:     "192.168.1.0/24",
 		},
 	}
 
@@ -726,18 +726,18 @@ func TestExecutor_renderVMSpec(t *testing.T) {
 		Provider: "test",
 		Spec: v1.VMSpec{
 			Memory:  1024,
-			VCPUs:   1,
+			Vcpus:   1,
 			Network: "test-net",
-			CloudInit: &v1.CloudInitSpec{
+			CloudInit: v1.CloudInitSpec{
 				Users: []v1.UserSpec{
 					{
 						Name:              "test",
-						SSHAuthorizedKeys: []string{"{{ .Keys.ssh.PublicKey }}"},
+						SshAuthorizedKeys: []string{"{{ .Keys.ssh.PublicKey }}"},
 					},
 				},
 			},
-			Readiness: &v1.ReadinessSpec{
-				SSH: &v1.SSHReadinessSpec{
+			Readiness: v1.ReadinessSpec{
+				Ssh: v1.SSHReadinessSpec{
 					Enabled:    true,
 					Timeout:    "5m",
 					PrivateKey: "{{ .Keys.ssh.PrivateKeyPath }}",
@@ -752,18 +752,18 @@ func TestExecutor_renderVMSpec(t *testing.T) {
 	}
 
 	// Verify original is unchanged
-	if original.Spec.CloudInit.Users[0].SSHAuthorizedKeys[0] != "{{ .Keys.ssh.PublicKey }}" {
+	if original.Spec.CloudInit.Users[0].SshAuthorizedKeys[0] != "{{ .Keys.ssh.PublicKey }}" {
 		t.Error("original spec was modified")
 	}
 
 	// Verify rendered values
-	if rendered.Spec.CloudInit.Users[0].SSHAuthorizedKeys[0] != "ssh-ed25519 AAAA..." {
+	if rendered.Spec.CloudInit.Users[0].SshAuthorizedKeys[0] != "ssh-ed25519 AAAA..." {
 		t.Errorf("rendered SSHAuthorizedKeys = %q, want ssh-ed25519 AAAA...",
-			rendered.Spec.CloudInit.Users[0].SSHAuthorizedKeys[0])
+			rendered.Spec.CloudInit.Users[0].SshAuthorizedKeys[0])
 	}
-	if rendered.Spec.Readiness.SSH.PrivateKey != "/tmp/ssh.key" {
+	if rendered.Spec.Readiness.Ssh.PrivateKey != "/tmp/ssh.key" {
 		t.Errorf("rendered PrivateKey = %q, want /tmp/ssh.key",
-			rendered.Spec.Readiness.SSH.PrivateKey)
+			rendered.Spec.Readiness.Ssh.PrivateKey)
 	}
 }
 
@@ -771,21 +771,21 @@ func TestExecutor_convertNetworkSpec(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
-		CIDR:     "192.168.1.0/24",
+		Cidr:     "192.168.1.0/24",
 		Gateway:  "192.168.1.1",
 		AttachTo: "br0",
-		MTU:      1500,
-		DHCP: &v1.DHCPSpec{
+		Mtu:      1500,
+		Dhcp: v1.DHCPSpec{
 			Enabled:    true,
 			RangeStart: "192.168.1.100",
 			RangeEnd:   "192.168.1.200",
 			LeaseTime:  "12h",
 		},
-		DNS: &v1.DNSSpec{
+		Dns: v1.DNSSpec{
 			Enabled: true,
 			Servers: []string{"8.8.8.8"},
 		},
-		TFTP: &v1.TFTPSpec{
+		Tftp: v1.TFTPSpec{
 			Enabled:  true,
 			Root:     "/tftpboot",
 			BootFile: "pxelinux.0",
@@ -818,7 +818,7 @@ func TestExecutor_convertNetworkSpec_NilSubspecs(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
-		CIDR: "192.168.1.0/24",
+		Cidr: "192.168.1.0/24",
 		// All sub-specs are nil
 	}
 
@@ -840,7 +840,7 @@ func TestExecutor_convertVMSpec(t *testing.T) {
 
 	vmSpec := v1.VMSpec{
 		Memory:  2048,
-		VCPUs:   2,
+		Vcpus:   2,
 		Network: "test-net",
 		Disk: v1.DiskSpec{
 			BaseImage: "/images/ubuntu.qcow2",
@@ -850,19 +850,19 @@ func TestExecutor_convertVMSpec(t *testing.T) {
 			Order:    []string{"hd", "network"},
 			Firmware: "uefi",
 		},
-		CloudInit: &v1.CloudInitSpec{
+		CloudInit: v1.CloudInitSpec{
 			Hostname: "test-vm",
 			Packages: []string{"nginx", "curl"},
 			Users: []v1.UserSpec{
 				{
 					Name: "admin",
 					Sudo: "ALL=(ALL) NOPASSWD:ALL",
-					SSHAuthorizedKeys: []string{"ssh-ed25519 AAAA..."},
+					SshAuthorizedKeys: []string{"ssh-ed25519 AAAA..."},
 				},
 			},
 		},
-		Readiness: &v1.ReadinessSpec{
-			SSH: &v1.SSHReadinessSpec{
+		Readiness: v1.ReadinessSpec{
+			Ssh: v1.SSHReadinessSpec{
 				Enabled: true,
 				Timeout: "5m",
 				User:    "admin",
@@ -909,7 +909,7 @@ func TestExecutor_convertVMSpec_NilSubspecs(t *testing.T) {
 
 	vmSpec := v1.VMSpec{
 		Memory:  1024,
-		VCPUs:   1,
+		Vcpus:   1,
 		Network: "test-net",
 		Disk:    v1.DiskSpec{Size: "10G"},
 		Boot:    v1.BootSpec{Order: []string{"hd"}},
@@ -937,7 +937,7 @@ func TestExecutor_ExecuteCreate_SkipsEmptyPhases(t *testing.T) {
 	executor := NewExecutor(manager, store, imageMgr)
 
 	ctx := context.Background()
-	testenvSpec := &v1.TestenvSpec{}
+	testenvSpec := &v1.Spec{}
 	envState := &v1.EnvironmentState{
 		ID:     "test-skip-empty",
 		Status: v1.StatusCreating,

@@ -29,7 +29,7 @@ import (
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name      string
-		spec      *v1.TestenvSpec
+		spec      *v1.Spec
 		wantErr   bool
 		errSubstr string
 	}{
@@ -41,7 +41,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "valid minimal spec passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -50,7 +50,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "valid full spec passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				StateDir:    "/tmp/state",
 				ArtifactDir: "/tmp/artifacts",
 				Providers: []v1.ProviderConfig{
@@ -63,12 +63,12 @@ func TestValidate(t *testing.T) {
 				Networks: []v1.NetworkResource{
 					{Name: "net1", Kind: "bridge"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory:  1024,
-							VCPUs:   2,
+							Vcpus:   2,
 							Network: "net1",
 						},
 					},
@@ -78,7 +78,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "defaultProvider not found fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -89,7 +89,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "defaultProvider and Default:true mismatch fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test", Default: true},
 					{Name: "provider2", Engine: "go://test2"},
@@ -348,7 +348,7 @@ func TestValidateNetworks(t *testing.T) {
 					Name: "net1",
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
-						DHCP: &v1.DHCPSpec{
+						Dhcp: v1.DHCPSpec{
 							Enabled:    true,
 							RangeStart: "192.168.1.100",
 							RangeEnd:   "192.168.1.200",
@@ -366,8 +366,8 @@ func TestValidateNetworks(t *testing.T) {
 					Name: "net1",
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
-						CIDR: "192.168.1.0/24",
-						DHCP: &v1.DHCPSpec{
+						Cidr: "192.168.1.0/24",
+						Dhcp: v1.DHCPSpec{
 							Enabled:    true,
 							RangeStart: "192.168.1.100",
 							RangeEnd:   "192.168.1.200",
@@ -384,7 +384,7 @@ func TestValidateNetworks(t *testing.T) {
 					Name: "net1",
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
-						DHCP: &v1.DHCPSpec{
+						Dhcp: v1.DHCPSpec{
 							Enabled: false,
 						},
 					},
@@ -429,7 +429,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  2,
+						Vcpus:  2,
 					},
 				},
 			},
@@ -442,7 +442,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  2,
+						Vcpus:  2,
 					},
 				},
 			},
@@ -456,7 +456,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 0,
-						VCPUs:  2,
+						Vcpus:  2,
 					},
 				},
 			},
@@ -470,7 +470,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: -1024,
-						VCPUs:  2,
+						Vcpus:  2,
 					},
 				},
 			},
@@ -484,7 +484,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  0,
+						Vcpus:  0,
 					},
 				},
 			},
@@ -498,7 +498,7 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  -1,
+						Vcpus:  -1,
 					},
 				},
 			},
@@ -512,14 +512,14 @@ func TestValidateVMs(t *testing.T) {
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 1024,
-						VCPUs:  2,
+						Vcpus:  2,
 					},
 				},
 				{
 					Name: "vm1",
 					Spec: v1.VMSpec{
 						Memory: 2048,
-						VCPUs:  4,
+						Vcpus:  4,
 					},
 				},
 			},
@@ -547,13 +547,13 @@ func TestValidateVMs(t *testing.T) {
 func TestValidateCrossReferences(t *testing.T) {
 	tests := []struct {
 		name      string
-		spec      *v1.TestenvSpec
+		spec      *v1.Spec
 		wantErr   bool
 		errSubstr string
 	}{
 		{
 			name: "provider reference not found fails - key",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -566,7 +566,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "provider reference not found fails - network",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -579,12 +579,12 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "provider reference not found fails - vm",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
-				VMs: []v1.VMResource{
-					{Name: "vm1", Provider: "nonexistent", Spec: v1.VMSpec{Memory: 1024, VCPUs: 2}},
+				Vms: []v1.VMResource{
+					{Name: "vm1", Provider: "nonexistent", Spec: v1.VMSpec{Memory: 1024, Vcpus: 2}},
 				},
 			},
 			wantErr:   true,
@@ -592,7 +592,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "network AttachTo not found fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -611,7 +611,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "network self-reference fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -630,16 +630,16 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "VM network not found fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory:  1024,
-							VCPUs:   2,
+							Vcpus:   2,
 							Network: "nonexistent",
 						},
 					},
@@ -650,7 +650,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "valid cross-references pass",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test", Default: true},
 					{Name: "provider2", Engine: "go://test2"},
@@ -662,13 +662,13 @@ func TestValidateCrossReferences(t *testing.T) {
 					{Name: "net1", Kind: "bridge", Provider: "provider1"},
 					{Name: "net2", Kind: "libvirt", Provider: "provider2", Spec: v1.NetworkSpec{AttachTo: "net1"}},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name:     "vm1",
 						Provider: "provider1",
 						Spec: v1.VMSpec{
 							Memory:  1024,
-							VCPUs:   2,
+							Vcpus:   2,
 							Network: "net1",
 						},
 					},
@@ -678,7 +678,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "valid AttachTo between networks passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -691,7 +691,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "templated attachTo passes Phase 1 validation",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -710,7 +710,7 @@ func TestValidateCrossReferences(t *testing.T) {
 		},
 		{
 			name: "templated attachTo with typo fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -820,13 +820,13 @@ func TestNewTemplatedFields(t *testing.T) {
 func TestValidateTemplateRefsExist(t *testing.T) {
 	tests := []struct {
 		name      string
-		spec      *v1.TestenvSpec
+		spec      *v1.Spec
 		wantErr   bool
 		errSubstr string
 	}{
 		{
 			name: "valid template ref to existing network passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -845,7 +845,7 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "template ref to non-existent network fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -864,21 +864,21 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "template ref to non-existent key fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
-							CloudInit: &v1.CloudInitSpec{
+							Vcpus:  1,
+							CloudInit: v1.CloudInitSpec{
 								Users: []v1.UserSpec{
 									{
 										Name:              "testuser",
-										SSHAuthorizedKeys: []string{"{{ .Keys.nonexistent.PublicKey }}"},
+										SshAuthorizedKeys: []string{"{{ .Keys.nonexistent.PublicKey }}"},
 									},
 								},
 							},
@@ -891,24 +891,24 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "valid template ref to existing key passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
 				Keys: []v1.KeyResource{
 					{Name: "my-key", Spec: v1.KeySpec{Type: "ed25519"}},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
-							CloudInit: &v1.CloudInitSpec{
+							Vcpus:  1,
+							CloudInit: v1.CloudInitSpec{
 								Users: []v1.UserSpec{
 									{
 										Name:              "testuser",
-										SSHAuthorizedKeys: []string{"{{ .Keys.my-key.PublicKey }}"},
+										SshAuthorizedKeys: []string{"{{ .Keys.my-key.PublicKey }}"},
 									},
 								},
 							},
@@ -920,16 +920,16 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "Env references are skipped (no error for missing env vars)",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
+							Vcpus:  1,
 							Disk: v1.DiskSpec{
 								BaseImage: "{{ .Env.BASE_IMAGE }}",
 							},
@@ -941,16 +941,16 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "template ref to non-existent image fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
+							Vcpus:  1,
 							Disk: v1.DiskSpec{
 								BaseImage: "{{ .Images.nonexistent.Path }}",
 							},
@@ -963,19 +963,19 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "valid template ref to existing image passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
 				Images: []v1.ImageResource{
 					{Name: "ubuntu", Spec: v1.ImageSpec{Source: "ubuntu:24.04"}},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
+							Vcpus:  1,
 							Disk: v1.DiskSpec{
 								BaseImage: "{{ .Images.ubuntu.Path }}",
 							},
@@ -987,19 +987,19 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "template ref to image alias passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
 				Images: []v1.ImageResource{
 					{Name: "ubuntu-24-04", Spec: v1.ImageSpec{Source: "ubuntu:24.04", Alias: "ubuntu"}},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "vm1",
 						Spec: v1.VMSpec{
 							Memory: 1024,
-							VCPUs:  1,
+							Vcpus:  1,
 							Disk: v1.DiskSpec{
 								BaseImage: "{{ .Images.ubuntu.Path }}",
 							},
@@ -1011,7 +1011,7 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 		},
 		{
 			name: "spec with no template refs passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1042,13 +1042,13 @@ func TestValidateTemplateRefsExist(t *testing.T) {
 func TestValidateEarlyTemplatedFields(t *testing.T) {
 	tests := []struct {
 		name                    string
-		spec                    *v1.TestenvSpec
+		spec                    *v1.Spec
 		expectedNetworkAttachTo map[string]bool
 		expectedVMNetwork       map[string]bool
 	}{
 		{
 			name: "network with templated attachTo is marked",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1068,7 +1068,7 @@ func TestValidateEarlyTemplatedFields(t *testing.T) {
 		},
 		{
 			name: "network with literal attachTo is not marked",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1088,19 +1088,19 @@ func TestValidateEarlyTemplatedFields(t *testing.T) {
 		},
 		{
 			name: "VM with templated network is marked",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
 				Networks: []v1.NetworkResource{
 					{Name: "test-net", Kind: "bridge"},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "test-vm",
 						Spec: v1.VMSpec{
 							Memory:  1024,
-							VCPUs:   1,
+							Vcpus:   1,
 							Network: "{{ .Networks.test-net.Name }}",
 						},
 					},
@@ -1111,7 +1111,7 @@ func TestValidateEarlyTemplatedFields(t *testing.T) {
 		},
 		{
 			name: "multiple templated fields are all marked",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1132,12 +1132,12 @@ func TestValidateEarlyTemplatedFields(t *testing.T) {
 						},
 					},
 				},
-				VMs: []v1.VMResource{
+				Vms: []v1.VMResource{
 					{
 						Name: "test-vm",
 						Spec: v1.VMSpec{
 							Memory:  1024,
-							VCPUs:   1,
+							Vcpus:   1,
 							Network: "{{ .Networks.parent-net.Name }}",
 						},
 					},
@@ -1188,7 +1188,7 @@ func TestValidateEarlyTemplatedFields(t *testing.T) {
 }
 
 func TestValidateResourceRefsLate(t *testing.T) {
-	fullSpec := &v1.TestenvSpec{
+	fullSpec := &v1.Spec{
 		Networks: []v1.NetworkResource{
 			{Name: "net1", Kind: "bridge"},
 			{Name: "net2", Kind: "nat"},
@@ -1250,7 +1250,7 @@ func TestValidateResourceRefsLate(t *testing.T) {
 			resourceName: "vm1",
 			renderedSpec: &v1.VMResource{
 				Name: "vm1",
-				Spec: v1.VMSpec{Network: "net1", Memory: 1024, VCPUs: 1},
+				Spec: v1.VMSpec{Network: "net1", Memory: 1024, Vcpus: 1},
 			},
 			templatedFields: &TemplatedFields{
 				NetworkAttachTo: make(map[string]bool),
@@ -1264,7 +1264,7 @@ func TestValidateResourceRefsLate(t *testing.T) {
 			resourceName: "vm1",
 			renderedSpec: &v1.VMResource{
 				Name: "vm1",
-				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, VCPUs: 1},
+				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, Vcpus: 1},
 			},
 			templatedFields: &TemplatedFields{
 				NetworkAttachTo: make(map[string]bool),
@@ -1304,7 +1304,7 @@ func TestValidateResourceRefsLate(t *testing.T) {
 			resourceName: "vm1",
 			renderedSpec: &v1.VMResource{
 				Name: "vm1",
-				Spec: v1.VMSpec{Network: "", Memory: 1024, VCPUs: 1},
+				Spec: v1.VMSpec{Network: "", Memory: 1024, Vcpus: 1},
 			},
 			templatedFields: &TemplatedFields{
 				NetworkAttachTo: make(map[string]bool),
@@ -1318,7 +1318,7 @@ func TestValidateResourceRefsLate(t *testing.T) {
 			resourceName: "vm1",
 			renderedSpec: &v1.VMResource{
 				Name: "vm1",
-				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, VCPUs: 1},
+				Spec: v1.VMSpec{Network: "nonexistent", Memory: 1024, Vcpus: 1},
 			},
 			templatedFields: NewTemplatedFields(),
 			wantErr:         false,
@@ -1350,13 +1350,13 @@ func TestValidateResourceRefsLate(t *testing.T) {
 func TestValidateImages(t *testing.T) {
 	tests := []struct {
 		name      string
-		spec      *v1.TestenvSpec
+		spec      *v1.Spec
 		wantErr   bool
 		errSubstr string
 	}{
 		{
 			name: "empty images passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1366,7 +1366,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "valid well-known image passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1378,7 +1378,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "valid HTTPS URL with SHA256 passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1387,7 +1387,7 @@ func TestValidateImages(t *testing.T) {
 						Name: "custom",
 						Spec: v1.ImageSpec{
 							Source: "https://example.com/image.qcow2",
-							SHA256: "abc123def456",
+							Sha256: "abc123def456",
 						},
 					},
 				},
@@ -1396,7 +1396,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "image without name fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1409,7 +1409,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "image without source fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1422,7 +1422,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "HTTP URL fails (only HTTPS allowed)",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1431,7 +1431,7 @@ func TestValidateImages(t *testing.T) {
 						Name: "test",
 						Spec: v1.ImageSpec{
 							Source: "http://example.com/image.qcow2",
-							SHA256: "abc123",
+							Sha256: "abc123",
 						},
 					},
 				},
@@ -1441,7 +1441,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "custom URL without SHA256 fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1459,7 +1459,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "well-known image without SHA256 passes (checksum optional)",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1477,7 +1477,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "duplicate image name fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1491,7 +1491,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "alias conflicting with name fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1505,7 +1505,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "name conflicting with prior alias fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1519,7 +1519,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "duplicate alias fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1533,7 +1533,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "valid alias passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1545,7 +1545,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "unknown source (not well-known, not URL) fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1558,7 +1558,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "imageCacheDir with valid path passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1568,7 +1568,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "imageCacheDir with whitespace-only fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1579,7 +1579,7 @@ func TestValidateImages(t *testing.T) {
 		},
 		{
 			name: "multiple valid images pass",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1590,7 +1590,7 @@ func TestValidateImages(t *testing.T) {
 						Name: "custom",
 						Spec: v1.ImageSpec{
 							Source: "https://example.com/image.qcow2",
-							SHA256: "abc123",
+							Sha256: "abc123",
 						},
 					},
 				},
@@ -1634,13 +1634,13 @@ func TestValidateImages_WithCustomRegistry(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		spec      *v1.TestenvSpec
+		spec      *v1.Spec
 		wantErr   bool
 		errSubstr string
 	}{
 		{
 			name: "custom well-known image passes",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},
@@ -1652,7 +1652,7 @@ func TestValidateImages_WithCustomRegistry(t *testing.T) {
 		},
 		{
 			name: "original well-known image (ubuntu:24.04) now fails",
-			spec: &v1.TestenvSpec{
+			spec: &v1.Spec{
 				Providers: []v1.ProviderConfig{
 					{Name: "provider1", Engine: "go://test"},
 				},

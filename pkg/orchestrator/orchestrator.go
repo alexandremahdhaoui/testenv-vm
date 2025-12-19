@@ -102,8 +102,8 @@ func NewOrchestrator(config Config) (*Orchestrator, error) {
 func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*CreateResult, error) {
 	log.Printf("Creating test environment: testID=%s, stage=%s", input.TestID, input.Stage)
 
-	// 1. Parse spec from input.Spec using spec.ParseFromMap
-	testenvSpec, err := spec.ParseFromMap(input.Spec)
+	// 1. Parse spec from input.Spec using v1.SpecFromMap (generated)
+	testenvSpec, err := v1.SpecFromMap(input.Spec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse spec: %w", err)
 	}

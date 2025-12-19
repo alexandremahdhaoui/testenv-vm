@@ -4,10 +4,15 @@ artifactStorePath: .forge/artifact-store.yaml
 envFile: .envrc
 
 build:
+  - name: generate-testenv-vm
+    src: ./cmd/testenv-vm
+    engine: go://forge-dev
+
   - name: testenv-vm
     src: ./cmd/testenv-vm
     dest: ./build/bin
     engine: go://go-build
+    depends: [generate-testenv-vm]
 
   - name: testenv-vm-provider-stub
     src: ./cmd/providers/testenv-vm-provider-stub

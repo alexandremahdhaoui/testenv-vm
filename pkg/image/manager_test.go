@@ -165,7 +165,7 @@ func TestEnsureImage_CacheMiss(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: server.URL + "/image.qcow2",
-		SHA256: expectedChecksum,
+		Sha256: expectedChecksum,
 	}
 
 	// First call - should download
@@ -285,7 +285,7 @@ func TestEnsureImage_CacheHit(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: source,
-		SHA256: checksum,
+		Sha256: checksum,
 	}
 
 	// This call should use the cache, not the server
@@ -345,7 +345,7 @@ func TestEnsureImage_WellKnown(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: "ubuntu:24.04", // Well-known reference
-		SHA256: checksum,       // User can optionally provide SHA256
+		Sha256: checksum,       // User can optionally provide SHA256
 	}
 
 	state, err := m.EnsureImage(context.Background(), "my-ubuntu", spec)
@@ -398,7 +398,7 @@ func TestEnsureImage_DirectURL(t *testing.T) {
 	directURL := server.URL + "/custom-image.qcow2"
 	spec := v1.ImageSpec{
 		Source: directURL,
-		SHA256: checksum,
+		Sha256: checksum,
 	}
 
 	state, err := m.EnsureImage(context.Background(), "custom-image", spec)
@@ -441,7 +441,7 @@ func TestEnsureImage_HTTPRejected(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: "http://insecure.example.com/image.qcow2", // HTTP, not HTTPS
-		SHA256: "abc123",
+		Sha256: "abc123",
 	}
 
 	_, err = m.EnsureImage(context.Background(), "insecure-image", spec)
@@ -483,7 +483,7 @@ func TestGetImagePath_Found(t *testing.T) {
 	// First ensure the image
 	spec := v1.ImageSpec{
 		Source: server.URL + "/testimg.qcow2",
-		SHA256: checksum,
+		Sha256: checksum,
 	}
 
 	state, err := m.EnsureImage(context.Background(), "lookup-test", spec)
@@ -604,7 +604,7 @@ func TestEnsureImage_ChecksumMismatch(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: server.URL + "/image.qcow2",
-		SHA256: "0000000000000000000000000000000000000000000000000000000000000000", // Wrong checksum
+		Sha256: "0000000000000000000000000000000000000000000000000000000000000000", // Wrong checksum
 	}
 
 	_, err = m.EnsureImage(context.Background(), "bad-checksum", spec)
@@ -646,7 +646,7 @@ func TestCacheManager_MetadataPersistence(t *testing.T) {
 
 	spec := v1.ImageSpec{
 		Source: server.URL + "/persist.qcow2",
-		SHA256: checksum,
+		Sha256: checksum,
 	}
 
 	state1, err := m1.EnsureImage(context.Background(), "persist-test", spec)

@@ -12,35 +12,77 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mcp
+package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"sync"
 
 	"github.com/alexandremahdhaoui/forge/pkg/engineframework"
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/orchestrator"
 )
 
-// handleCreate handles the MCP "create" tool call.
-// It converts the engineframework input to v1 input, calls the orchestrator,
-// and converts the v1 output to engineframework output.
-func (s *Server) handleCreate(ctx context.Context, input engineframework.CreateInput) (*engineframework.TestEnvArtifact, error) {
+var (
+	// orch is the shared orchestrator instance.
+	orch     *orchestrator.Orchestrator
+	orchOnce sync.Once
+	orchErr  error
+)
+
+// getOrchestrator returns the shared orchestrator instance, initializing it if necessary.
+func getOrchestrator() (*orchestrator.Orchestrator, error) {
+	orchOnce.Do(func() {
+		// Configure from environment
+		stateDir := getEnvOrDefault("TESTENV_VM_STATE_DIR", ".forge/testenv-vm/state")
+		cleanupOnFailure := getEnvOrDefault("TESTENV_VM_CLEANUP_ON_FAILURE", "true") == "true"
+		imageCacheDir := os.Getenv("TESTENV_VM_IMAGE_CACHE_DIR")
+
+		orch, orchErr = orchestrator.NewOrchestrator(orchestrator.Config{
+			StateDir:         stateDir,
+			ImageCacheDir:    imageCacheDir,
+			CleanupOnFailure: cleanupOnFailure,
+		})
+	})
+	return orch, orchErr
+}
+
+// getEnvOrDefault returns the value of the environment variable with the given key,
+// or the default value if the environment variable is not set or empty.
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// Create creates a new test environment from the given input.
+// This is the main entry point called by the generated MCP server.
+func Create(ctx context.Context, input engineframework.CreateInput, spec *v1.Spec) (*engineframework.TestEnvArtifact, error) {
 	log.Printf("Handling create request: testID=%s, stage=%s", input.TestID, input.Stage)
 
+	o, err := getOrchestrator()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get orchestrator: %w", err)
+	}
+
 	// Convert engineframework.CreateInput to v1.CreateInput
+	// The orchestrator expects Spec as map[string]any, so we convert using ToMap()
 	v1Input := &v1.CreateInput{
 		TestID:   input.TestID,
 		Stage:    input.Stage,
 		TmpDir:   input.TmpDir,
 		RootDir:  input.RootDir,
 		Metadata: input.Metadata,
-		Spec:     input.Spec,
+		Spec:     spec.ToMap(),
 		Env:      input.Env,
 	}
 
 	// Call the orchestrator
-	createResult, err := s.orch.Create(ctx, v1Input)
+	createResult, err := o.Create(ctx, v1Input)
 	if err != nil {
 		log.Printf("Create failed: %v", err)
 		return nil, err
@@ -58,27 +100,6 @@ func (s *Server) handleCreate(ctx context.Context, input engineframework.CreateI
 
 	log.Printf("Create succeeded: testID=%s", input.TestID)
 	return result, nil
-}
-
-// handleDelete handles the MCP "delete" tool call.
-// It converts the engineframework input to v1 input and calls the orchestrator.
-func (s *Server) handleDelete(ctx context.Context, input engineframework.DeleteInput) error {
-	log.Printf("Handling delete request: testID=%s", input.TestID)
-
-	// Convert engineframework.DeleteInput to v1.DeleteInput
-	v1Input := &v1.DeleteInput{
-		TestID:   input.TestID,
-		Metadata: input.Metadata,
-	}
-
-	// Call the orchestrator
-	if err := s.orch.Delete(ctx, v1Input); err != nil {
-		log.Printf("Delete failed: %v", err)
-		return err
-	}
-
-	log.Printf("Delete succeeded: testID=%s", input.TestID)
-	return nil
 }
 
 // normalizeFilesMap ensures the map is non-nil for MCP serialization.

@@ -1,0 +1,13 @@
+name: testenv-vm
+type: testenv-subengine
+version: 0.1.0
+
+openapi:
+  specPath: ./spec.openapi.yaml
+
+generate:
+  packageName: main
+  specTypes:
+    enabled: true
+    outputPath: api/v1
+    packageName: v1

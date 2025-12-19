@@ -38,8 +38,8 @@ type EnvironmentState struct {
 	CreatedAt string `json:"createdAt"`
 	// UpdatedAt is the ISO8601 timestamp of last update.
 	UpdatedAt string `json:"updatedAt"`
-	// Spec is the original TestenvSpec (for reference during cleanup).
-	Spec *TestenvSpec `json:"spec,omitempty"`
+	// Spec is the original Spec (for reference during cleanup).
+	Spec *Spec `json:"spec,omitempty"`
 	// Resources contains all resource states organized by type.
 	Resources ResourceMap `json:"resources"`
 	// ExecutionPlan contains the phases for resource creation/deletion.

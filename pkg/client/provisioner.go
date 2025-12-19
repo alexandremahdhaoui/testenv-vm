@@ -60,7 +60,7 @@ type RuntimeProvisionerConfig struct {
 	// TemplateCtx is the template context for rendering.
 	TemplateCtx *spec.TemplateContext
 	// Spec is the testenv specification for provider resolution.
-	Spec *v1.TestenvSpec
+	Spec *v1.Spec
 }
 
 // NewRuntimeProvisioner creates a new RuntimeProvisioner from the given configuration.
@@ -208,7 +208,7 @@ func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, p
 	if vmSpec.Memory <= 0 {
 		return fmt.Errorf("VM %q: memory must be greater than 0", name)
 	}
-	if vmSpec.VCPUs <= 0 {
+	if vmSpec.Vcpus <= 0 {
 		return fmt.Errorf("VM %q: vcpus must be greater than 0", name)
 	}
 	if vmSpec.Disk.Size == "" {
@@ -250,7 +250,7 @@ func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, p
 func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 	result := providerv1.VMSpec{
 		Memory:  spec.Memory,
-		VCPUs:   spec.VCPUs,
+		VCPUs:   spec.Vcpus,
 		Network: spec.Network,
 		Disk: providerv1.DiskSpec{
 			BaseImage: spec.Disk.BaseImage,
@@ -262,7 +262,8 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		},
 	}
 
-	if spec.CloudInit != nil {
+	// Check if CloudInit has any content (it's a value type, not a pointer)
+	if spec.CloudInit.Hostname != "" || len(spec.CloudInit.Users) > 0 || len(spec.CloudInit.Packages) > 0 {
 		result.CloudInit = &providerv1.CloudInitSpec{
 			Hostname: spec.CloudInit.Hostname,
 			Packages: spec.CloudInit.Packages,
@@ -271,18 +272,19 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 			result.CloudInit.Users = append(result.CloudInit.Users, providerv1.UserSpec{
 				Name:              u.Name,
 				Sudo:              u.Sudo,
-				SSHAuthorizedKeys: u.SSHAuthorizedKeys,
+				SSHAuthorizedKeys: u.SshAuthorizedKeys,
 			})
 		}
 	}
 
-	if spec.Readiness != nil && spec.Readiness.SSH != nil {
+	// Check if Readiness.Ssh has any content (they're value types, not pointers)
+	if spec.Readiness.Ssh.Enabled {
 		result.Readiness = &providerv1.ReadinessSpec{
 			SSH: &providerv1.SSHReadinessSpec{
-				Enabled:    spec.Readiness.SSH.Enabled,
-				Timeout:    spec.Readiness.SSH.Timeout,
-				User:       spec.Readiness.SSH.User,
-				PrivateKey: spec.Readiness.SSH.PrivateKey,
+				Enabled:    spec.Readiness.Ssh.Enabled,
+				Timeout:    spec.Readiness.Ssh.Timeout,
+				User:       spec.Readiness.Ssh.User,
+				PrivateKey: spec.Readiness.Ssh.PrivateKey,
 			},
 		}
 	}
@@ -381,7 +383,7 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 
 	// Extract SSH user from cloud-init config (or "root" if not specified)
 	sshUser := "root"
-	if renderedSpec.CloudInit != nil && len(renderedSpec.CloudInit.Users) > 0 {
+	if len(renderedSpec.CloudInit.Users) > 0 {
 		if renderedSpec.CloudInit.Users[0].Name != "" {
 			sshUser = renderedSpec.CloudInit.Users[0].Name
 		}
@@ -389,10 +391,10 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 
 	// Find private key path from templateCtx.Keys
 	privateKeyPath := ""
-	if renderedSpec.CloudInit != nil && len(renderedSpec.CloudInit.Users) > 0 {
+	if len(renderedSpec.CloudInit.Users) > 0 {
 		// Look for the first key that matches an SSH authorized key
 		for keyName, keyData := range rp.templateCtx.Keys {
-			for _, authKey := range renderedSpec.CloudInit.Users[0].SSHAuthorizedKeys {
+			for _, authKey := range renderedSpec.CloudInit.Users[0].SshAuthorizedKeys {
 				if authKey == keyData.PublicKey {
 					privateKeyPath = keyData.PrivateKeyPath
 					_ = keyName // suppress unused variable warning
