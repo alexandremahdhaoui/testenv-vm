@@ -203,17 +203,13 @@ components:
           description: Enables DHCP.
         rangeStart:
           type: string
-          description: First IP in DHCP range.
+          description: First IP in DHCP range. Required when enabled is true.
         rangeEnd:
           type: string
-          description: Last IP in DHCP range.
+          description: Last IP in DHCP range. Required when enabled is true.
         leaseTime:
           type: string
           description: 'Lease time duration (e.g., 12h).'
-      required:
-        - enabled
-        - rangeStart
-        - rangeEnd
 
     DNSSpec:
       type: object
@@ -237,14 +233,10 @@ components:
           description: Enables TFTP server.
         root:
           type: string
-          description: Directory for TFTP files.
+          description: Directory for TFTP files. Required when enabled is true.
         bootFile:
           type: string
-          description: Default boot file (e.g., undionly.kpxe).
-      required:
-        - enabled
-        - root
-        - bootFile
+          description: Default boot file (e.g., undionly.kpxe). Required when enabled is true.
 
     VMResource:
       type: object
