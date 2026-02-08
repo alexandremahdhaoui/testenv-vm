@@ -428,6 +428,10 @@ components:
       properties:
         ssh:
           $ref: '#/components/schemas/SSHReadinessSpec'
+        tcp:
+          $ref: '#/components/schemas/TCPReadinessSpec'
+        cloudInit:
+          $ref: '#/components/schemas/CloudInitReadinessSpec'
 
     SSHReadinessSpec:
       type: object
@@ -446,6 +450,34 @@ components:
         privateKey:
           type: string
           description: Private key path (can use template).
+      required:
+        - enabled
+
+    TCPReadinessSpec:
+      type: object
+      description: TCP port readiness check configuration.
+      properties:
+        port:
+          type: integer
+          description: Port to check for TCP connectivity.
+        timeout:
+          type: string
+          description: 'Timeout for port to become available (e.g., 5m).'
+          default: "3m"
+      required:
+        - port
+
+    CloudInitReadinessSpec:
+      type: object
+      description: Cloud-init completion readiness check.
+      properties:
+        enabled:
+          type: boolean
+          description: Enables cloud-init completion check.
+        timeout:
+          type: string
+          description: 'Timeout for cloud-init to complete (e.g., 10m).'
+          default: "10m"
       required:
         - enabled
 

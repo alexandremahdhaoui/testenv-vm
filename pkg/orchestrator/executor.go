@@ -674,15 +674,32 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		}
 	}
 
-	// Readiness.Ssh is a value type, check if enabled
+	// Build readiness spec from orchestrator-level config
+	// Initialize if any readiness check is enabled
+	if spec.Readiness.Ssh.Enabled || spec.Readiness.CloudInit.Enabled || spec.Readiness.Tcp.Port > 0 {
+		result.Readiness = &providerv1.ReadinessSpec{}
+	}
+
 	if spec.Readiness.Ssh.Enabled {
-		result.Readiness = &providerv1.ReadinessSpec{
-			SSH: &providerv1.SSHReadinessSpec{
-				Enabled:    spec.Readiness.Ssh.Enabled,
-				Timeout:    spec.Readiness.Ssh.Timeout,
-				User:       spec.Readiness.Ssh.User,
-				PrivateKey: spec.Readiness.Ssh.PrivateKey,
-			},
+		result.Readiness.SSH = &providerv1.SSHReadinessSpec{
+			Enabled:    spec.Readiness.Ssh.Enabled,
+			Timeout:    spec.Readiness.Ssh.Timeout,
+			User:       spec.Readiness.Ssh.User,
+			PrivateKey: spec.Readiness.Ssh.PrivateKey,
+		}
+	}
+
+	if spec.Readiness.CloudInit.Enabled {
+		result.Readiness.CloudInit = &providerv1.CloudInitReadinessSpec{
+			Enabled: spec.Readiness.CloudInit.Enabled,
+			Timeout: spec.Readiness.CloudInit.Timeout,
+		}
+	}
+
+	if spec.Readiness.Tcp.Port > 0 {
+		result.Readiness.TCP = &providerv1.TCPReadinessSpec{
+			Port:    spec.Readiness.Tcp.Port,
+			Timeout: spec.Readiness.Tcp.Timeout,
 		}
 	}
 
