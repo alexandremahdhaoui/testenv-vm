@@ -74,6 +74,12 @@ func (p *Provider) NetworkCreate(req *providerv1.NetworkCreateRequest) *provider
 	dhcpEnabled := true
 	if req.Spec.DHCP != nil {
 		dhcpEnabled = req.Spec.DHCP.Enabled
+		if req.Spec.DHCP.RangeStart != "" {
+			dhcpStart = req.Spec.DHCP.RangeStart
+		}
+		if req.Spec.DHCP.RangeEnd != "" {
+			dhcpEnd = req.Spec.DHCP.RangeEnd
+		}
 	}
 
 	// Build network config

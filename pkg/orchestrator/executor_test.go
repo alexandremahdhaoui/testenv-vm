@@ -775,17 +775,19 @@ func TestExecutor_convertNetworkSpec(t *testing.T) {
 		Gateway:  "192.168.1.1",
 		AttachTo: "br0",
 		Mtu:      1500,
-		Dhcp: v1.DHCPSpec{
+		Dhcp: &v1.DHCPSpec{
 			Enabled:    true,
 			RangeStart: "192.168.1.100",
 			RangeEnd:   "192.168.1.200",
 			LeaseTime:  "12h",
+			Router:     "192.168.1.1",
+			DnsServers: []string{"8.8.8.8"},
 		},
-		Dns: v1.DNSSpec{
+		Dns: &v1.DNSSpec{
 			Enabled: true,
 			Servers: []string{"8.8.8.8"},
 		},
-		Tftp: v1.TFTPSpec{
+		Tftp: &v1.TFTPSpec{
 			Enabled:  true,
 			Root:     "/tftpboot",
 			BootFile: "pxelinux.0",
@@ -806,6 +808,12 @@ func TestExecutor_convertNetworkSpec(t *testing.T) {
 	if !result.DHCP.Enabled {
 		t.Error("DHCP.Enabled should be true")
 	}
+	if result.DHCP.Router != "192.168.1.1" {
+		t.Errorf("DHCP.Router = %s, want 192.168.1.1", result.DHCP.Router)
+	}
+	if len(result.DHCP.DNSServers) != 1 || result.DHCP.DNSServers[0] != "8.8.8.8" {
+		t.Errorf("DHCP.DNSServers = %v, want [8.8.8.8]", result.DHCP.DNSServers)
+	}
 	if result.DNS == nil {
 		t.Fatal("DNS is nil")
 	}
@@ -819,19 +827,39 @@ func TestExecutor_convertNetworkSpec_NilSubspecs(t *testing.T) {
 
 	spec := v1.NetworkSpec{
 		Cidr: "192.168.1.0/24",
-		// All sub-specs are nil
+		// All sub-specs are nil (pointer types)
 	}
 
 	result := executor.convertNetworkSpec(spec)
 
 	if result.DHCP != nil {
-		t.Error("DHCP should be nil")
+		t.Error("DHCP should be nil when Dhcp pointer is nil")
 	}
 	if result.DNS != nil {
-		t.Error("DNS should be nil")
+		t.Error("DNS should be nil when Dns pointer is nil")
 	}
 	if result.TFTP != nil {
-		t.Error("TFTP should be nil")
+		t.Error("TFTP should be nil when Tftp pointer is nil")
+	}
+}
+
+func TestExecutor_convertNetworkSpec_ExplicitDisable(t *testing.T) {
+	executor := newTestExecutor(t)
+
+	spec := v1.NetworkSpec{
+		Cidr: "192.168.1.0/24",
+		Dhcp: &v1.DHCPSpec{
+			Enabled: false,
+		},
+	}
+
+	result := executor.convertNetworkSpec(spec)
+
+	if result.DHCP == nil {
+		t.Fatal("DHCP should not be nil when explicitly set")
+	}
+	if result.DHCP.Enabled {
+		t.Error("DHCP.Enabled should be false when explicitly disabled")
 	}
 }
 
@@ -1133,3 +1161,4 @@ func TestExecutor_updateTemplateContext_UnknownKind(t *testing.T) {
 		t.Error("unexpected vm data added")
 	}
 }
+

@@ -172,6 +172,57 @@ func TestGenerateNATNetworkXML(t *testing.T) {
 	}
 }
 
+func TestGenerateNATNetworkXML_DHCPDisabled(t *testing.T) {
+	config := NetworkConfig{
+		Name:        "no-dhcp",
+		BridgeName:  "virbr-nodhcp",
+		Gateway:     "192.168.100.1",
+		Netmask:     "255.255.255.0",
+		DHCPEnabled: false,
+		DHCPStart:   "192.168.100.2",
+		DHCPEnd:     "192.168.100.254",
+	}
+
+	xml, err := generateNATNetworkXML(config)
+	if err != nil {
+		t.Fatalf("generateNATNetworkXML failed: %v", err)
+	}
+
+	if strings.Contains(xml, "<dhcp>") {
+		t.Error("NAT network XML should NOT contain <dhcp> when DHCPEnabled is false")
+	}
+	if !strings.Contains(xml, "<forward mode='nat'>") {
+		t.Error("NAT network XML should still contain forward mode='nat'")
+	}
+	if !strings.Contains(xml, "address='192.168.100.1'") {
+		t.Error("NAT network XML should still contain gateway IP")
+	}
+}
+
+func TestGenerateNATNetworkXML_CustomDHCPRange(t *testing.T) {
+	config := NetworkConfig{
+		Name:        "custom-range",
+		BridgeName:  "virbr-custom",
+		Gateway:     "192.168.100.1",
+		Netmask:     "255.255.255.0",
+		DHCPEnabled: true,
+		DHCPStart:   "192.168.100.50",
+		DHCPEnd:     "192.168.100.200",
+	}
+
+	xml, err := generateNATNetworkXML(config)
+	if err != nil {
+		t.Fatalf("generateNATNetworkXML failed: %v", err)
+	}
+
+	if !strings.Contains(xml, "start='192.168.100.50'") {
+		t.Error("NAT network XML should contain custom DHCP start")
+	}
+	if !strings.Contains(xml, "end='192.168.100.200'") {
+		t.Error("NAT network XML should contain custom DHCP end")
+	}
+}
+
 func TestGenerateIsolatedNetworkXML(t *testing.T) {
 	config := NetworkConfig{
 		Name:       "test-isolated",

@@ -348,7 +348,7 @@ func TestValidateNetworks(t *testing.T) {
 					Name: "net1",
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
-						Dhcp: v1.DHCPSpec{
+						Dhcp: &v1.DHCPSpec{
 							Enabled:    true,
 							RangeStart: "192.168.1.100",
 							RangeEnd:   "192.168.1.200",
@@ -367,7 +367,7 @@ func TestValidateNetworks(t *testing.T) {
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
 						Cidr: "192.168.1.0/24",
-						Dhcp: v1.DHCPSpec{
+						Dhcp: &v1.DHCPSpec{
 							Enabled:    true,
 							RangeStart: "192.168.1.100",
 							RangeEnd:   "192.168.1.200",
@@ -384,7 +384,7 @@ func TestValidateNetworks(t *testing.T) {
 					Name: "net1",
 					Kind: "bridge",
 					Spec: v1.NetworkSpec{
-						Dhcp: v1.DHCPSpec{
+						Dhcp: &v1.DHCPSpec{
 							Enabled: false,
 						},
 					},

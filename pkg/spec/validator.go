@@ -245,7 +245,7 @@ func ValidateNetworks(networks []v1.NetworkResource) error {
 		seen[n.Name] = true
 
 		// If DHCP is enabled, CIDR is required
-		if n.Spec.Dhcp.Enabled && n.Spec.Cidr == "" {
+		if n.Spec.Dhcp != nil && n.Spec.Dhcp.Enabled && n.Spec.Cidr == "" {
 			return fmt.Errorf("network %q: cidr is required when DHCP is enabled", n.Name)
 		}
 	}

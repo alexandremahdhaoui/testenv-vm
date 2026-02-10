@@ -73,17 +73,17 @@ func TestSpec_JSONRoundtrip(t *testing.T) {
 							Cidr:    "192.168.100.0/24",
 							Gateway: "192.168.100.1",
 							Mtu:     1500,
-							Dhcp: DHCPSpec{
+							Dhcp: &DHCPSpec{
 								Enabled:    true,
 								RangeStart: "192.168.100.10",
 								RangeEnd:   "192.168.100.100",
 								LeaseTime:  "12h",
 							},
-							Dns: DNSSpec{
+							Dns: &DNSSpec{
 								Enabled: true,
 								Servers: []string{"8.8.8.8"},
 							},
-							Tftp: TFTPSpec{
+							Tftp: &TFTPSpec{
 								Enabled:  true,
 								Root:     "/var/tftp",
 								BootFile: "undionly.kpxe",

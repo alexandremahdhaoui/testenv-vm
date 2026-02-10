@@ -196,6 +196,7 @@ components:
 
     DHCPSpec:
       type: object
+      nullable: true
       description: DHCP server configuration.
       properties:
         enabled:
@@ -210,9 +211,18 @@ components:
         leaseTime:
           type: string
           description: 'Lease time duration (e.g., 12h).'
+        router:
+          type: string
+          description: Custom gateway/router IP to advertise via DHCP. Defaults to network gateway.
+        dnsServers:
+          type: array
+          description: DNS servers to advertise via DHCP.
+          items:
+            type: string
 
     DNSSpec:
       type: object
+      nullable: true
       description: DNS forwarding configuration.
       properties:
         enabled:
@@ -226,6 +236,7 @@ components:
 
     TFTPSpec:
       type: object
+      nullable: true
       description: TFTP server configuration for PXE boot.
       properties:
         enabled:

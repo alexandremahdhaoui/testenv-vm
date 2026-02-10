@@ -577,27 +577,27 @@ func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpe
 		MTU:      spec.Mtu,
 	}
 
-	// DHCP, DNS, TFTP are value types in generated code.
-	// If DHCP was explicitly specified (any field set), pass it to provider.
-	// If DHCP is completely unset (zero value), pass nil to let provider use its default (enabled).
-	if spec.Dhcp.Enabled || spec.Dhcp.RangeStart != "" || spec.Dhcp.RangeEnd != "" || spec.Dhcp.LeaseTime != "" {
+	// Dhcp is *DHCPSpec: nil means "not specified" (provider defaults to enabled),
+	// non-nil with Enabled=false means "explicitly disabled".
+	if spec.Dhcp != nil {
 		result.DHCP = &providerv1.DHCPSpec{
 			Enabled:    spec.Dhcp.Enabled,
 			RangeStart: spec.Dhcp.RangeStart,
 			RangeEnd:   spec.Dhcp.RangeEnd,
 			LeaseTime:  spec.Dhcp.LeaseTime,
+			Router:     spec.Dhcp.Router,
+			DNSServers: spec.Dhcp.DnsServers,
 		}
 	}
-	// If DHCP is completely unset, result.DHCP remains nil and provider will default to enabled
 
-	if spec.Dns.Enabled || len(spec.Dns.Servers) > 0 {
+	if spec.Dns != nil {
 		result.DNS = &providerv1.DNSSpec{
 			Enabled: spec.Dns.Enabled,
 			Servers: spec.Dns.Servers,
 		}
 	}
 
-	if spec.Tftp.Enabled || spec.Tftp.Root != "" || spec.Tftp.BootFile != "" {
+	if spec.Tftp != nil {
 		result.TFTP = &providerv1.TFTPSpec{
 			Enabled:  spec.Tftp.Enabled,
 			Root:     spec.Tftp.Root,
