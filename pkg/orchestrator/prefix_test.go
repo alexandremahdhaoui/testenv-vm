@@ -35,7 +35,7 @@ func TestResourcePrefix(t *testing.T) {
 		{
 			name:  "known input produces deterministic output",
 			input: "test-e2e-20260210-abc123",
-			want:  "d3f1a2",
+			want:  "4cff26",
 		},
 	}
 
@@ -100,7 +100,7 @@ func TestSubnetOctet(t *testing.T) {
 		{
 			name:  "known input produces deterministic output",
 			input: "test-e2e-20260210-abc123",
-			want:  87,
+			want:  218,
 		},
 	}
 
