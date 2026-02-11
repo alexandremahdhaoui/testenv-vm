@@ -211,7 +211,7 @@ type NetworkSpec struct {
 	// References another network resource (for layered networks).
 	AttachTo string `json:"attachTo,omitempty"`
 	// Network CIDR (e.g., 192.168.100.1/24).
-	Cidr string   `json:"cidr,omitempty"`
+	Cidr string    `json:"cidr,omitempty"`
 	Dhcp *DHCPSpec `json:"dhcp,omitempty"`
 	Dns  *DNSSpec  `json:"dns,omitempty"`
 	// Gateway IP address.
