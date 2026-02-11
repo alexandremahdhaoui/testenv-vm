@@ -23,7 +23,7 @@ import (
 )
 
 // resolveIP attempts to resolve the IP address for a VM by polling DHCP leases.
-// It returns an empty string (not an error) if the IP cannot be resolved within the timeout.
+// It returns an error if the IP cannot be resolved within the timeout.
 func resolveIP(conn *libvirt.Libvirt, networkName, macAddress string, timeout time.Duration) (string, error) {
 	// Look up the network
 	net, err := conn.NetworkLookupByName(networkName)
@@ -57,8 +57,8 @@ func resolveIP(conn *libvirt.Libvirt, networkName, macAddress string, timeout ti
 		time.Sleep(pollInterval)
 	}
 
-	// Timeout reached, return empty string (not an error per design doc)
-	return "", nil
+	// Timeout reached, return error
+	return "", fmt.Errorf("DHCP lease not found for MAC %s on network %s within %v", macAddress, networkName, timeout)
 }
 
 // extractMACFromDomainXML extracts the MAC address from a domain's XML.

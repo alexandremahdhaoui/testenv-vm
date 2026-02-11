@@ -138,8 +138,57 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	}
 	mac := extractMACFromDomainXML(xmlDesc)
 
-	// Resolve IP address (non-blocking, returns empty if not found)
-	ip, _ := resolveIP(p.conn, networkName, mac, 60*time.Second)
+	// Determine whether strict readiness checks are required
+	sshReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.SSH != nil
+	ipTimeout := 60 * time.Second // best-effort default
+	if sshReadiness {
+		ipTimeout = 3 * time.Minute // strict default
+		if req.Spec.Readiness.SSH.Timeout != "" {
+			if d, err := time.ParseDuration(req.Spec.Readiness.SSH.Timeout); err == nil {
+				ipTimeout = d
+			}
+		}
+	}
+
+	// Wait for VM boot (60s fixed budget, capped to half of total)
+	bootTimeout := 60 * time.Second
+	if bootTimeout > ipTimeout {
+		bootTimeout = ipTimeout / 2
+	}
+	bootStart := time.Now()
+	if err := waitForVMBoot(p.conn, dom, bootTimeout); err != nil {
+		if sshReadiness {
+			return providerv1.ErrorResult(providerv1.NewProviderError(
+				fmt.Sprintf("VM %s failed boot check: %s", req.Name, err.Error()), true))
+		}
+		// Best-effort: log and continue without boot verification
+	}
+
+	// Resolve IP with remaining budget (total minus time already spent on boot check)
+	remaining := ipTimeout - time.Since(bootStart)
+	if remaining < 30*time.Second {
+		remaining = 30 * time.Second // minimum 30s for DHCP
+	}
+	ip, err := resolveIP(p.conn, networkName, mac, remaining)
+	if sshReadiness {
+		if err != nil {
+			return providerv1.ErrorResult(providerv1.NewTimeoutError("ip-resolution"))
+		}
+		if ip == "" {
+			return providerv1.ErrorResult(providerv1.NewProviderError(
+				fmt.Sprintf("VM %s: resolved empty IP without error", req.Name), true))
+		}
+		// Validate IP reachability via TCP probe to SSH port
+		if err := validateIPReachability(ip, 22, 10*time.Second); err != nil {
+			return providerv1.ErrorResult(providerv1.NewProviderError(
+				fmt.Sprintf("VM %s IP %s not reachable: %s", req.Name, ip, err.Error()), true))
+		}
+	} else {
+		// Best-effort: use resolved IP if available, empty string otherwise
+		if err != nil {
+			ip = ""
+		}
+	}
 
 	// Generate SSH command if we have an IP and matched keys
 	sshCommand := ""
