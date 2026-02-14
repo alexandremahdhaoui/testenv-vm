@@ -465,7 +465,7 @@ func TestOrchestrator_buildArtifact_Empty(t *testing.T) {
 		},
 	}
 
-	artifact := orchestrator.buildArtifact("test-1", envState)
+	artifact := orchestrator.buildArtifact("test-1", envState, nil)
 
 	if artifact.TestID != "test-1" {
 		t.Errorf("TestID = %s, want test-1", artifact.TestID)
@@ -529,7 +529,7 @@ func TestOrchestrator_buildArtifact_WithResources(t *testing.T) {
 		},
 	}
 
-	artifact := orchestrator.buildArtifact("test-1", envState)
+	artifact := orchestrator.buildArtifact("test-1", envState, nil)
 
 	// Verify key artifact
 	if _, ok := artifact.Files["testenv-vm.key.ssh-key"]; !ok {
@@ -593,7 +593,7 @@ func TestOrchestrator_buildArtifact_NilResourceState(t *testing.T) {
 	}
 
 	// Should not panic
-	artifact := orchestrator.buildArtifact("test-1", envState)
+	artifact := orchestrator.buildArtifact("test-1", envState, nil)
 	if artifact == nil {
 		t.Error("buildArtifact returned nil")
 	}

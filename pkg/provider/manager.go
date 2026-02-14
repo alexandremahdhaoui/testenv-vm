@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -256,8 +257,14 @@ func resolveGoEngine(engine string) (*exec.Cmd, error) {
 	// Extract version if present
 	pkgPath, version := stripVersion(pkgPath)
 
-	// External module: always use go run with full path
+	// External module: use go run with full path
 	if isExternalModule(pkgPath) {
+		// In workspace development mode, drop @version for workspace members
+		// so Go uses the local workspace copy instead of downloading a published version.
+		if os.Getenv(EnvRunLocalEnabled) == "true" && isWorkspaceModule(pkgPath) {
+			return exec.Command("go", "run", pkgPath, "--mcp"), nil
+		}
+
 		var fullPath string
 		if version != "" {
 			fullPath = pkgPath + version
@@ -319,6 +326,78 @@ func isExternalModule(path string) bool {
 	firstSlash := strings.Index(path, "/")
 	firstSegment := path[:firstSlash]
 	return strings.Contains(firstSegment, ".")
+}
+
+// isWorkspaceModule checks if modulePath belongs to a module listed in the
+// nearest go.work file. It parses the go.work use directives and reads each
+// member's go.mod to extract module paths.
+func isWorkspaceModule(modulePath string) bool {
+	dir, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+
+	// Find go.work by walking up
+	var goWorkDir string
+	for d := dir; ; {
+		if _, err := os.Stat(filepath.Join(d, "go.work")); err == nil {
+			goWorkDir = d
+			break
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+
+	content, err := os.ReadFile(filepath.Join(goWorkDir, "go.work"))
+	if err != nil {
+		return false
+	}
+
+	// Parse use directives and check each member's module path
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		// Skip non-directory lines (go version, use keyword, parens, comments)
+		if line == "" || strings.HasPrefix(line, "go ") || strings.HasPrefix(line, "//") ||
+			line == "use (" || line == ")" || line == "use" {
+			continue
+		}
+		useDir := strings.TrimPrefix(line, "use ")
+		useDir = strings.TrimSpace(useDir)
+		if useDir == "" || useDir == "(" {
+			continue
+		}
+
+		var absDir string
+		if filepath.IsAbs(useDir) {
+			absDir = useDir
+		} else {
+			absDir = filepath.Join(goWorkDir, useDir)
+		}
+
+		modPath := readModulePath(filepath.Join(absDir, "go.mod"))
+		if modPath != "" && strings.HasPrefix(modulePath, modPath) {
+			return true
+		}
+	}
+	return false
+}
+
+// readModulePath reads a go.mod file and returns the module path declared in it.
+func readModulePath(goModPath string) string {
+	content, err := os.ReadFile(goModPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
 }
 
 // resolveBinaryEngine resolves a binary path engine specification.

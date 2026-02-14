@@ -64,6 +64,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Redirect log output to a debug file so provider logs are visible
+	// (provider stderr is inherited but not captured by MCP client output).
+	debugLogPath := fmt.Sprintf("/tmp/testenv-vm-provider-%d.log", os.Getpid())
+	if f, err := os.OpenFile(debugLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		log.SetOutput(f)
+		defer func() { _ = f.Close() }()
+	}
+	log.Printf("Provider starting: version=%s pid=%d", Version, os.Getpid())
+
 	if err := runMCPServer(); err != nil {
 		log.Fatalf("MCP server failed: %v", err)
 	}

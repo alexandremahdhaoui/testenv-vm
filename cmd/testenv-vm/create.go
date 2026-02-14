@@ -64,6 +64,17 @@ func getEnvOrDefault(key, defaultValue string) string {
 func Create(ctx context.Context, input engineframework.CreateInput, spec *v1.Spec) (*engineframework.TestEnvArtifact, error) {
 	log.Printf("Handling create request: testID=%s, stage=%s", input.TestID, input.Stage)
 
+	// Propagate spec.StateDir to TESTENV_VM_STATE_DIR env var so both the
+	// orchestrator and provider subprocess (which inherits environment) use
+	// the same state directory. This prevents key pair mismatches where the
+	// orchestrator and provider each create independent key files.
+	if spec.StateDir != "" && os.Getenv("TESTENV_VM_STATE_DIR") == "" {
+		if err := os.Setenv("TESTENV_VM_STATE_DIR", spec.StateDir); err != nil {
+			return nil, fmt.Errorf("failed to set TESTENV_VM_STATE_DIR: %w", err)
+		}
+		log.Printf("Set TESTENV_VM_STATE_DIR=%s from spec", spec.StateDir)
+	}
+
 	o, err := getOrchestrator()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get orchestrator: %w", err)

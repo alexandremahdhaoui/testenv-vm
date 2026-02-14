@@ -73,7 +73,7 @@ func TestExecutor_ExecuteCreate_NilSpec(t *testing.T) {
 		Status: v1.StatusCreating,
 	}
 
-	_, err := executor.ExecuteCreate(ctx, nil, nil, nil, envState, nil)
+	_, err := executor.ExecuteCreate(ctx, nil, nil, nil, envState, nil, nil)
 	if err == nil {
 		t.Error("expected error for nil spec")
 	}
@@ -85,7 +85,7 @@ func TestExecutor_ExecuteCreate_NilState(t *testing.T) {
 	ctx := context.Background()
 	testenvSpec := &v1.Spec{}
 
-	_, err := executor.ExecuteCreate(ctx, testenvSpec, nil, nil, nil, nil)
+	_, err := executor.ExecuteCreate(ctx, testenvSpec, nil, nil, nil, nil, nil)
 	if err == nil {
 		t.Error("expected error for nil state")
 	}
@@ -108,7 +108,7 @@ func TestExecutor_ExecuteCreate_EmptyPlan(t *testing.T) {
 	templateCtx := spec.NewTemplateContext()
 
 	// Empty plan should succeed
-	result, err := executor.ExecuteCreate(ctx, testenvSpec, [][]v1.ResourceRef{}, templateCtx, envState, nil)
+	result, err := executor.ExecuteCreate(ctx, testenvSpec, [][]v1.ResourceRef{}, templateCtx, envState, nil, nil)
 	if err != nil {
 		t.Fatalf("ExecuteCreate() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestExecutor_ExecuteDelete_NilState(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := executor.ExecuteDelete(ctx, nil)
+	err := executor.ExecuteDelete(ctx, nil, nil)
 	if err == nil {
 		t.Error("expected error for nil state")
 	}
@@ -143,7 +143,7 @@ func TestExecutor_ExecuteDelete_EmptyPlan(t *testing.T) {
 		ExecutionPlan: nil, // No plan
 	}
 
-	err := executor.ExecuteDelete(ctx, envState)
+	err := executor.ExecuteDelete(ctx, envState, nil)
 	if err != nil {
 		t.Errorf("ExecuteDelete() error = %v, expected nil for empty plan", err)
 	}
@@ -175,7 +175,7 @@ func TestExecutor_ExecuteDelete_ReversePhaseOrder(t *testing.T) {
 	// Without a running provider, delete will fail for each resource
 	// but the method should still process in reverse order
 	// We test this by verifying no panic occurs
-	err := executor.ExecuteDelete(ctx, envState)
+	err := executor.ExecuteDelete(ctx, envState, nil)
 	// Error is expected since no providers are running
 	// The important thing is it doesn't panic
 	_ = err
@@ -988,7 +988,7 @@ func TestExecutor_ExecuteCreate_SkipsEmptyPhases(t *testing.T) {
 		t.Fatalf("failed to save state: %v", err)
 	}
 
-	result, err := executor.ExecuteCreate(ctx, testenvSpec, plan, templateCtx, envState, nil)
+	result, err := executor.ExecuteCreate(ctx, testenvSpec, plan, templateCtx, envState, nil, nil)
 	if err != nil {
 		t.Fatalf("ExecuteCreate() error = %v", err)
 	}

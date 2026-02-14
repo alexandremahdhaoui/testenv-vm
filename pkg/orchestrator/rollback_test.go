@@ -44,7 +44,7 @@ func TestExecutor_Rollback_NilState(t *testing.T) {
 	executor, _ := newTestExecutorForRollback(t)
 
 	ctx := context.Background()
-	errors := executor.Rollback(ctx, nil)
+	errors := executor.Rollback(ctx, nil, nil)
 
 	if len(errors) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(errors))
@@ -74,7 +74,7 @@ func TestExecutor_Rollback_EmptyPlan(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	if len(errors) != 0 {
 		t.Errorf("expected 0 errors for empty plan, got %d: %v", len(errors), errors)
@@ -103,7 +103,7 @@ func TestExecutor_Rollback_EmptyPhases(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	if len(errors) != 0 {
 		t.Errorf("expected 0 errors for empty phases, got %d: %v", len(errors), errors)
@@ -139,7 +139,7 @@ func TestExecutor_Rollback_SkipsDestroyedResources(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	// Should have no errors since the resource is already destroyed and skipped
 	if len(errors) != 0 {
@@ -171,7 +171,7 @@ func TestExecutor_Rollback_SkipsResourceNotInState(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	// Should have no errors since resource not in state is skipped
 	if len(errors) != 0 {
@@ -208,7 +208,7 @@ func TestExecutor_Rollback_UpdatesStatus(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	// No errors expected when resource is skipped (already destroyed)
 	if len(errors) != 0 {
@@ -262,7 +262,7 @@ func TestExecutor_Rollback_ContinuesOnError(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.Rollback(ctx, envState)
+	errors := executor.Rollback(ctx, envState, nil)
 
 	// Should have errors (3 resources that failed to delete)
 	if len(errors) < 3 {
@@ -294,7 +294,7 @@ func TestExecutor_RollbackPhase_EmptyPhase(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	errors := executor.RollbackPhase(ctx, []v1.ResourceRef{}, envState)
+	errors := executor.RollbackPhase(ctx, []v1.ResourceRef{}, envState, nil)
 
 	if len(errors) != 0 {
 		t.Errorf("expected 0 errors for empty phase, got %d", len(errors))
@@ -323,7 +323,7 @@ func TestExecutor_RollbackPhase_SkipsDestroyedResource(t *testing.T) {
 	}
 
 	phase := []v1.ResourceRef{{Kind: "key", Name: "key1"}}
-	errors := executor.RollbackPhase(ctx, phase, envState)
+	errors := executor.RollbackPhase(ctx, phase, envState, nil)
 
 	if len(errors) != 0 {
 		t.Errorf("expected 0 errors when skipping destroyed resource, got %d", len(errors))
@@ -363,7 +363,7 @@ func TestExecutor_RollbackPhase_ParallelDeletion(t *testing.T) {
 		{Kind: "vm", Name: "vm3"},
 	}
 
-	errors := executor.RollbackPhase(ctx, phase, envState)
+	errors := executor.RollbackPhase(ctx, phase, envState, nil)
 
 	// All 3 should fail (no provider)
 	if len(errors) != 3 {
@@ -409,7 +409,7 @@ func TestExecutor_Rollback_ReversePhaseOrder(t *testing.T) {
 
 	// Run rollback - it will fail on all resources, but should process
 	// in reverse order: vm1 first, then net1, then key1
-	_ = executor.Rollback(ctx, envState)
+	_ = executor.Rollback(ctx, envState, nil)
 
 	// The fact that rollback completed without panic indicates
 	// the reverse order logic is working
@@ -442,7 +442,7 @@ func TestExecutor_Rollback_RecordsErrors(t *testing.T) {
 		t.Fatalf("failed to save initial state: %v", err)
 	}
 
-	_ = executor.Rollback(ctx, envState)
+	_ = executor.Rollback(ctx, envState, nil)
 
 	// Errors should be recorded in state
 	if len(envState.Errors) == 0 {
@@ -487,7 +487,7 @@ func TestExecutor_RollbackPhase_NoProviderForResource(t *testing.T) {
 	}
 
 	phase := []v1.ResourceRef{{Kind: "key", Name: "key1"}}
-	errors := executor.RollbackPhase(ctx, phase, envState)
+	errors := executor.RollbackPhase(ctx, phase, envState, nil)
 
 	// Should have an error about no provider
 	if len(errors) != 1 {

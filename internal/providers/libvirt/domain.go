@@ -170,8 +170,25 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		remaining = 30 * time.Second // minimum 30s for DHCP
 	}
 	ip, err := resolveIP(p.conn, networkName, mac, remaining)
+
+	// Fallback: try ARP resolution for VMs with static IPs (no DHCP lease)
+	if err != nil || ip == "" {
+		if arpIP := resolveIPFromARP(p.conn, dom); arpIP != "" {
+			ip = arpIP
+			err = nil
+		}
+	}
+
+	// Fallback: extract static IP from CloudInit networkConfig
+	if (err != nil || ip == "") && req.Spec.CloudInit != nil {
+		if staticIP := extractStaticIP(req.Spec.CloudInit); staticIP != "" {
+			ip = staticIP
+			err = nil
+		}
+	}
+
 	if sshReadiness {
-		if err != nil {
+		if err != nil || ip == "" {
 			return providerv1.ErrorResult(providerv1.NewTimeoutError("ip-resolution"))
 		}
 		if ip == "" {
@@ -182,6 +199,13 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		if err := validateIPReachability(ip, 22, 10*time.Second); err != nil {
 			return providerv1.ErrorResult(providerv1.NewProviderError(
 				fmt.Sprintf("VM %s IP %s not reachable: %s", req.Name, ip, err.Error()), true))
+		}
+
+		// Run SSH and cloud-init readiness checks if configured
+		if req.Spec.Readiness != nil {
+			if opErr := waitForReadiness(req.Spec.Readiness, ip); opErr != nil {
+				return providerv1.ErrorResult(opErr)
+			}
 		}
 	} else {
 		// Best-effort: use resolved IP if available, empty string otherwise

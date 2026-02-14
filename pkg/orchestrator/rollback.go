@@ -30,7 +30,7 @@ import (
 // Only resources that were actually created (status != "destroyed") are deleted.
 // Errors are logged but do not abort the rollback process.
 // Returns a slice of all errors encountered during rollback.
-func (e *Executor) Rollback(ctx context.Context, state *v1.EnvironmentState) []error {
+func (e *Executor) Rollback(ctx context.Context, state *v1.EnvironmentState, isoConfig *IsolationConfig) []error {
 	if state == nil {
 		return []error{fmt.Errorf("state cannot be nil")}
 	}
@@ -65,7 +65,7 @@ func (e *Executor) Rollback(ctx context.Context, state *v1.EnvironmentState) []e
 
 	// Execute deletion phases sequentially (in reverse order)
 	for _, phase := range phases {
-		phaseErrors := e.RollbackPhase(ctx, phase, state)
+		phaseErrors := e.RollbackPhase(ctx, phase, state, isoConfig)
 		allErrors = append(allErrors, phaseErrors...)
 	}
 
@@ -97,7 +97,7 @@ func (e *Executor) Rollback(ctx context.Context, state *v1.EnvironmentState) []e
 // Only resources that were actually created (status != "destroyed") are deleted.
 // Errors are logged but do not abort the rollback process.
 // Returns a slice of errors encountered during this phase's rollback.
-func (e *Executor) RollbackPhase(ctx context.Context, phase []v1.ResourceRef, state *v1.EnvironmentState) []error {
+func (e *Executor) RollbackPhase(ctx context.Context, phase []v1.ResourceRef, state *v1.EnvironmentState, isoConfig *IsolationConfig) []error {
 	if len(phase) == 0 {
 		return nil
 	}
@@ -127,7 +127,7 @@ func (e *Executor) RollbackPhase(ctx context.Context, phase []v1.ResourceRef, st
 
 			log.Printf("rollback: deleting %s/%s", r.Kind, r.Name)
 
-			if err := e.deleteResource(ctx, r, state); err != nil {
+			if err := e.deleteResource(ctx, r, state, isoConfig); err != nil {
 				log.Printf("rollback: failed to delete %s/%s: %v", r.Kind, r.Name, err)
 				mu.Lock()
 				phaseErrors = append(phaseErrors, fmt.Errorf("failed to delete %s/%s: %w", r.Kind, r.Name, err))

@@ -17,6 +17,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -31,6 +33,60 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
+
+// IsolationConfig holds per-test-environment isolation parameters that ensure
+// parallel test runs do not collide on host-level resources (libvirt names, subnets).
+type IsolationConfig struct {
+	// NamePrefix is a short hash derived from testID, used to prefix all
+	// provider resource names (keys, networks, VMs).
+	NamePrefix string
+	// OriginalCIDRPrefix is the original subnet prefix from the spec (e.g., "192.168.100.").
+	OriginalCIDRPrefix string
+	// NewCIDRPrefix is the derived unique subnet prefix (e.g., "192.168.142.").
+	NewCIDRPrefix string
+}
+
+// shortHash returns the first 8 hex characters of the SHA-256 hash of s.
+func shortHash(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return fmt.Sprintf("%x", h[:4])
+}
+
+// hashToOctet maps a testID to a unique third-octet value in the range [2, 253].
+// This avoids 0, 1, 254, 255 which are commonly reserved.
+func hashToOctet(testID string) int {
+	h := sha256.Sum256([]byte(testID))
+	// Use the first 2 bytes to get a uint16, then map to [2, 253]
+	val := binary.BigEndian.Uint16(h[:2])
+	return int(val%252) + 2
+}
+
+// newIsolationConfig creates an IsolationConfig from a testID and the spec's network CIDR.
+func newIsolationConfig(testID string, specNetworks []v1.NetworkResource) *IsolationConfig {
+	prefix := shortHash(testID)
+	octet := hashToOctet(testID)
+
+	// Find the original CIDR prefix from the first network in the spec.
+	// We extract the first three octets to use as the replacement source.
+	originalPrefix := "192.168.100."
+	for _, net := range specNetworks {
+		if net.Spec.Cidr != "" {
+			parts := strings.Split(net.Spec.Cidr, ".")
+			if len(parts) >= 3 {
+				originalPrefix = parts[0] + "." + parts[1] + "." + parts[2] + "."
+				break
+			}
+		}
+	}
+
+	newPrefix := fmt.Sprintf("192.168.%d.", octet)
+
+	return &IsolationConfig{
+		NamePrefix:         prefix,
+		OriginalCIDRPrefix: originalPrefix,
+		NewCIDRPrefix:      newPrefix,
+	}
+}
 
 // Config contains configuration for the Orchestrator.
 type Config struct {
@@ -108,13 +164,19 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 		return nil, fmt.Errorf("failed to parse spec: %w", err)
 	}
 
-	// 2. Validate spec using spec.ValidateEarly (Phase 1)
+	// 2. Generate isolation config for parallel test execution.
+	// This derives unique resource name prefixes and subnet from the testID.
+	isoConfig := newIsolationConfig(input.TestID, testenvSpec.Networks)
+	log.Printf("Isolation config: prefix=%s, originalCIDR=%s, newCIDR=%s",
+		isoConfig.NamePrefix, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+
+	// 3. Validate spec using spec.ValidateEarly (Phase 1)
 	templatedFields, err := spec.ValidateEarly(testenvSpec)
 	if err != nil {
 		return nil, fmt.Errorf("spec validation failed: %w", err)
 	}
 
-	// 3. Create artifact directory: {input.TmpDir}/{input.TestID}/
+	// 4. Create artifact directory: {input.TmpDir}/{input.TestID}/
 	artifactDir := filepath.Join(input.TmpDir, input.TestID)
 	if err := os.MkdirAll(artifactDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create artifact directory %q: %w", artifactDir, err)
@@ -175,7 +237,7 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 	}
 
 	// 10. Execute phases using executor.ExecuteCreate (with templated fields for Phase 2 validation)
-	result, err := o.executor.ExecuteCreate(ctx, testenvSpec, phases, templateCtx, envState, templatedFields)
+	result, err := o.executor.ExecuteCreate(ctx, testenvSpec, phases, templateCtx, envState, templatedFields, isoConfig)
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %w", err)
 	}
@@ -184,7 +246,7 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 	if !result.Success {
 		if o.config.CleanupOnFailure {
 			log.Printf("Execution failed, performing rollback")
-			rollbackErrors := o.executor.Rollback(ctx, envState)
+			rollbackErrors := o.executor.Rollback(ctx, envState, isoConfig)
 			if len(rollbackErrors) > 0 {
 				log.Printf("Rollback completed with %d errors", len(rollbackErrors))
 			}
@@ -213,7 +275,7 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 	}
 
 	// 13. Build TestEnvArtifact
-	artifact := o.buildArtifact(input.TestID, envState)
+	artifact := o.buildArtifact(input.TestID, envState, isoConfig)
 
 	// 14. Create RuntimeProvisioner for runtime VM creation
 	provisioner, err := client.NewRuntimeProvisioner(client.RuntimeProvisionerConfig{
@@ -275,8 +337,15 @@ func (o *Orchestrator) Delete(ctx context.Context, input *v1.DeleteInput) error 
 		}
 	}
 
-	// 5. Execute delete in reverse order using executor.ExecuteDelete
-	if err := o.executor.ExecuteDelete(ctx, envState); err != nil {
+	// 5. Re-derive isolation config from testID (same deterministic hash)
+	var networks []v1.NetworkResource
+	if envState.Spec != nil {
+		networks = envState.Spec.Networks
+	}
+	isoConfig := newIsolationConfig(input.TestID, networks)
+
+	// 6. Execute delete in reverse order using executor.ExecuteDelete
+	if err := o.executor.ExecuteDelete(ctx, envState, isoConfig); err != nil {
 		log.Printf("Delete completed with errors: %v", err)
 		// Continue anyway - best effort
 	}
@@ -325,13 +394,18 @@ func buildExecutionPlan(phases [][]v1.ResourceRef) *v1.ExecutionPlan {
 }
 
 // buildArtifact builds the TestEnvArtifact from the environment state.
-func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentState) *v1.TestEnvArtifact {
+func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentState, isoConfig *IsolationConfig) *v1.TestEnvArtifact {
 	artifact := &v1.TestEnvArtifact{
 		TestID:           testID,
 		Files:            make(map[string]string),
 		Metadata:         make(map[string]string),
 		ManagedResources: []string{},
 		Env:              make(map[string]string),
+	}
+
+	// Export isolation config as environment variables for test code
+	if isoConfig != nil {
+		artifact.Env["TESTENV_VM_NAME_PREFIX"] = isoConfig.NamePrefix
 	}
 
 	// Map SSH key paths from state
@@ -348,6 +422,7 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 				}
 				artifact.Files[fmt.Sprintf("testenv-vm.key.%s", name)] = relPath
 				artifact.ManagedResources = append(artifact.ManagedResources, privateKeyPath)
+				artifact.Env[fmt.Sprintf("TESTENV_KEY_%s_PRIVATE_PATH", toEnvVarName(name))] = privateKeyPath
 			}
 
 			// Extract public key path
@@ -366,17 +441,19 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 			fmt.Sprintf("testenv-vm://key/%s", name))
 	}
 
-	// Map network info to metadata
+	// Map network info to metadata and env
 	for name, networkState := range envState.Resources.Networks {
 		if networkState.State != nil {
 			// Extract network IP
 			if ip, ok := networkState.State["ip"].(string); ok && ip != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.network.%s.ip", name)] = ip
+				artifact.Env[fmt.Sprintf("TESTENV_NETWORK_%s_IP", toEnvVarName(name))] = ip
 			}
 
 			// Extract interface name
 			if ifName, ok := networkState.State["interfaceName"].(string); ok && ifName != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.network.%s.interface", name)] = ifName
+				artifact.Env[fmt.Sprintf("TESTENV_NETWORK_%s_INTERFACE", toEnvVarName(name))] = ifName
 			}
 		}
 

@@ -858,9 +858,9 @@ func sshExecWithKey(t *testing.T, privateKeyPath, user, host string, command str
 	return stdout.String(), stderr.String(), err
 }
 
-// waitForCloudInit waits for cloud-init to complete by checking for the boot-finished marker.
+// waitForCloudInitSSH waits for cloud-init to complete by checking for the boot-finished marker via SSH.
 // Returns an error if cloud-init doesn't complete within the timeout.
-func waitForCloudInit(t *testing.T, privateKeyPath, user, host string, timeout time.Duration) error {
+func waitForCloudInitSSH(t *testing.T, privateKeyPath, user, host string, timeout time.Duration) error {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -1041,7 +1041,7 @@ func TestIntegration_CloudInitVerification(t *testing.T) {
 
 	// Wait for cloud-init to complete (up to 5 minutes)
 	t.Log("Waiting for cloud-init to complete...")
-	if err := waitForCloudInit(t, privateKeyPath, "testadmin", vmIP, 5*time.Minute); err != nil {
+	if err := waitForCloudInitSSH(t, privateKeyPath, "testadmin", vmIP, 5*time.Minute); err != nil {
 		t.Fatalf("Cloud-init did not complete within timeout")
 	}
 

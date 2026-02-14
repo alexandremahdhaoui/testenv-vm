@@ -18,6 +18,8 @@ package libvirt
 
 import (
 	"testing"
+
+	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
 )
 
 func TestExtractMACFromDomainXML_ValidMAC(t *testing.T) {
@@ -146,5 +148,79 @@ func TestExtractMACFromDomainXML_PartialMACElement(t *testing.T) {
 	mac := extractMACFromDomainXML(xml)
 	if mac != "" {
 		t.Errorf("Expected empty string for partial MAC element, got '%s'", mac)
+	}
+}
+
+func TestExtractStaticIP_NilCloudInit(t *testing.T) {
+	ip := extractStaticIP(nil)
+	if ip != "" {
+		t.Errorf("expected empty string for nil CloudInit, got %q", ip)
+	}
+}
+
+func TestExtractStaticIP_NilNetworkConfig(t *testing.T) {
+	ci := &providerv1.CloudInitSpec{}
+	ip := extractStaticIP(ci)
+	if ip != "" {
+		t.Errorf("expected empty string for nil NetworkConfig, got %q", ip)
+	}
+}
+
+func TestExtractStaticIP_EmptyEthernets(t *testing.T) {
+	ci := &providerv1.CloudInitSpec{
+		NetworkConfig: &providerv1.CloudInitNetworkConfig{},
+	}
+	ip := extractStaticIP(ci)
+	if ip != "" {
+		t.Errorf("expected empty string for empty ethernets, got %q", ip)
+	}
+}
+
+func TestExtractStaticIP_CIDRNotation(t *testing.T) {
+	ci := &providerv1.CloudInitSpec{
+		NetworkConfig: &providerv1.CloudInitNetworkConfig{
+			Ethernets: []providerv1.CloudInitEthernetConfig{
+				{
+					Name:      "ens2",
+					Addresses: []string{"192.168.100.10/24"},
+				},
+			},
+		},
+	}
+	ip := extractStaticIP(ci)
+	if ip != "192.168.100.10" {
+		t.Errorf("expected 192.168.100.10, got %q", ip)
+	}
+}
+
+func TestExtractStaticIP_BareIP(t *testing.T) {
+	ci := &providerv1.CloudInitSpec{
+		NetworkConfig: &providerv1.CloudInitNetworkConfig{
+			Ethernets: []providerv1.CloudInitEthernetConfig{
+				{
+					Name:      "ens2",
+					Addresses: []string{"10.0.0.5"},
+				},
+			},
+		},
+	}
+	ip := extractStaticIP(ci)
+	if ip != "10.0.0.5" {
+		t.Errorf("expected 10.0.0.5, got %q", ip)
+	}
+}
+
+func TestExtractStaticIP_MultipleEthernets(t *testing.T) {
+	ci := &providerv1.CloudInitSpec{
+		NetworkConfig: &providerv1.CloudInitNetworkConfig{
+			Ethernets: []providerv1.CloudInitEthernetConfig{
+				{Name: "ens2", Addresses: []string{}},
+				{Name: "ens3", Addresses: []string{"172.16.0.1/16"}},
+			},
+		},
+	}
+	ip := extractStaticIP(ci)
+	if ip != "172.16.0.1" {
+		t.Errorf("expected 172.16.0.1, got %q", ip)
 	}
 }

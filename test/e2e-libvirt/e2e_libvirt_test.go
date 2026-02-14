@@ -294,7 +294,11 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 	// orchestrator's IP resolution may timeout before the VM gets a DHCP lease.
 	// LibvirtProvider queries libvirt directly and will retry until IP is available.
 	t.Log("Testing SSH connectivity (using LibvirtProvider for IP resolution)...")
-	testSSHConnectivity(t, artifact, "e2e-libvirt-vm")
+	libvirtVMName := "e2e-libvirt-vm"
+	if prefix := artifact.Env["TESTENV_VM_NAME_PREFIX"]; prefix != "" {
+		libvirtVMName = prefix + "-" + libvirtVMName
+	}
+	testSSHConnectivity(t, artifact, libvirtVMName)
 
 	// Cleanup
 	t.Log("Deleting test environment...")
@@ -320,30 +324,36 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 func testSSHConnectivity(t *testing.T, artifact *v1.TestEnvArtifact, vmName string) {
 	t.Helper()
 
-	// Get key path from artifact
+	// Get key path from artifact — try SSH command first (always absolute),
+	// then fall back to artifact.Files.
 	keyPath := ""
-	for k, v := range artifact.Files {
-		if strings.Contains(k, "key") {
-			keyPath = v
-			break
+	if sshCmd, ok := artifact.Env["TESTENV_VM_E2E_LIBVIRT_VM_SSH"]; ok {
+		// Parse: ssh -i /path/to/key -o ... user@host
+		for i, part := range strings.Fields(sshCmd) {
+			if part == "-i" && i+1 < len(strings.Fields(sshCmd)) {
+				keyPath = strings.Fields(sshCmd)[i+1]
+				break
+			}
 		}
 	}
 	if keyPath == "" {
-		t.Fatal("no SSH key found in artifact files")
+		for k, v := range artifact.Files {
+			if strings.Contains(k, "key") {
+				keyPath = v
+				break
+			}
+		}
+	}
+	if keyPath == "" {
+		t.Fatal("no SSH key found in artifact")
 	}
 
-	// Make keyPath absolute if it's relative
+	// Resolve relative paths against state dir
 	if !filepath.IsAbs(keyPath) {
-		// The key path might be relative to tmpDir or a global state dir
-		// Check common locations for the key
-		possiblePaths := []string{
-			filepath.Join(getProjectRoot(t), keyPath),
-			"/tmp/testenv-vm-1000/keys/e2e-libvirt-key",
-		}
-		for _, p := range possiblePaths {
-			if _, err := os.Stat(p); err == nil {
-				keyPath = p
-				break
+		abs, err := filepath.Abs(keyPath)
+		if err == nil {
+			if _, statErr := os.Stat(abs); statErr == nil {
+				keyPath = abs
 			}
 		}
 	}

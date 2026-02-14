@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,7 @@ func (e *Executor) ExecuteCreate(
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
 	templatedFields *specpkg.TemplatedFields,
+	isoConfig *IsolationConfig,
 ) (*ExecutionResult, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("spec cannot be nil")
@@ -88,7 +90,7 @@ func (e *Executor) ExecuteCreate(
 			continue
 		}
 
-		phaseErrors := e.executePhase(ctx, phase, spec, templateCtx, envState, templatedFields)
+		phaseErrors := e.executePhase(ctx, phase, spec, templateCtx, envState, templatedFields, isoConfig)
 		if len(phaseErrors) > 0 {
 			result.Errors = append(result.Errors, phaseErrors...)
 			result.Success = false
@@ -124,7 +126,7 @@ func (e *Executor) ExecuteCreate(
 // Phases are reversed and processed sequentially, with resources in each phase deleted in parallel.
 // Best-effort: continues on individual failures, collecting all errors.
 // Note: Status management is handled by the orchestrator, not the executor.
-func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentState) error {
+func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentState, isoConfig *IsolationConfig) error {
 	if envState == nil {
 		return fmt.Errorf("state cannot be nil")
 	}
@@ -159,7 +161,7 @@ func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentSt
 			go func(r v1.ResourceRef) {
 				defer wg.Done()
 
-				if err := e.deleteResource(ctx, r, envState); err != nil {
+				if err := e.deleteResource(ctx, r, envState, isoConfig); err != nil {
 					mu.Lock()
 					phaseErrors = append(phaseErrors, fmt.Errorf("failed to delete %s/%s: %w", r.Kind, r.Name, err))
 					mu.Unlock()
@@ -189,6 +191,7 @@ func (e *Executor) executePhase(
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
 	templatedFields *specpkg.TemplatedFields,
+	isoConfig *IsolationConfig,
 ) []error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -199,7 +202,7 @@ func (e *Executor) executePhase(
 		go func(r v1.ResourceRef) {
 			defer wg.Done()
 
-			if err := e.createResource(ctx, r, spec, templateCtx, envState, templatedFields); err != nil {
+			if err := e.createResource(ctx, r, spec, templateCtx, envState, templatedFields, isoConfig); err != nil {
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("failed to create %s/%s: %w", r.Kind, r.Name, err))
 				mu.Unlock()
@@ -213,6 +216,15 @@ func (e *Executor) executePhase(
 
 // createResource creates a single resource using the appropriate provider.
 // After template rendering, Phase 2 validation is performed for templated fields.
+// prefixedName returns the provider-level name with the isolation prefix.
+// Internal state always uses the ORIGINAL name (ref.Name); only provider calls use the prefixed name.
+func prefixedName(isoConfig *IsolationConfig, name string) string {
+	if isoConfig == nil || isoConfig.NamePrefix == "" {
+		return name
+	}
+	return isoConfig.NamePrefix + "-" + name
+}
+
 func (e *Executor) createResource(
 	ctx context.Context,
 	ref v1.ResourceRef,
@@ -220,6 +232,7 @@ func (e *Executor) createResource(
 	templateCtx *specpkg.TemplateContext,
 	envState *v1.EnvironmentState,
 	templatedFields *specpkg.TemplatedFields,
+	isoConfig *IsolationConfig,
 ) error {
 	// Determine provider name
 	providerName := ref.Provider
@@ -244,7 +257,7 @@ func (e *Executor) createResource(
 			return fmt.Errorf("failed to render key spec: %w", err)
 		}
 		request = &providerv1.KeyCreateRequest{
-			Name: ref.Name,
+			Name: prefixedName(isoConfig, ref.Name),
 			Spec: providerv1.KeySpec{
 				Type:      renderedSpec.Spec.Type,
 				Bits:      renderedSpec.Spec.Bits,
@@ -272,10 +285,20 @@ func (e *Executor) createResource(
 		if err := specpkg.ValidateResourceRefsLate("network", ref.Name, renderedSpec, spec, templatedFields); err != nil {
 			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
+		convertedSpec := e.convertNetworkSpec(renderedSpec.Spec)
+		// Rewrite CIDR and gateway for isolation
+		if isoConfig != nil && isoConfig.OriginalCIDRPrefix != isoConfig.NewCIDRPrefix {
+			convertedSpec.CIDR = strings.ReplaceAll(convertedSpec.CIDR, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+			convertedSpec.Gateway = strings.ReplaceAll(convertedSpec.Gateway, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+			if convertedSpec.DHCP != nil {
+				convertedSpec.DHCP.RangeStart = strings.ReplaceAll(convertedSpec.DHCP.RangeStart, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+				convertedSpec.DHCP.RangeEnd = strings.ReplaceAll(convertedSpec.DHCP.RangeEnd, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+			}
+		}
 		request = &providerv1.NetworkCreateRequest{
-			Name: ref.Name,
-			Kind: renderedSpec.Kind,
-			Spec: e.convertNetworkSpec(renderedSpec.Spec),
+			Name:         prefixedName(isoConfig, ref.Name),
+			Kind:         renderedSpec.Kind,
+			Spec:         convertedSpec,
 			ProviderSpec: renderedSpec.ProviderSpec,
 		}
 		if providerName == "" {
@@ -297,9 +320,32 @@ func (e *Executor) createResource(
 		if err := specpkg.ValidateResourceRefsLate("vm", ref.Name, renderedSpec, spec, templatedFields); err != nil {
 			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
+		convertedVMSpec := e.convertVMSpec(renderedSpec.Spec)
+		// Prefix the network reference and rewrite cloud-init IPs for isolation
+		if isoConfig != nil && isoConfig.NamePrefix != "" {
+			convertedVMSpec.Network = prefixedName(isoConfig, convertedVMSpec.Network)
+		}
+		if isoConfig != nil && isoConfig.OriginalCIDRPrefix != isoConfig.NewCIDRPrefix {
+			if convertedVMSpec.CloudInit != nil {
+				for i, wf := range convertedVMSpec.CloudInit.WriteFiles {
+					convertedVMSpec.CloudInit.WriteFiles[i].Content = strings.ReplaceAll(wf.Content, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+				}
+				for i, cmd := range convertedVMSpec.CloudInit.Runcmd {
+					convertedVMSpec.CloudInit.Runcmd[i] = strings.ReplaceAll(cmd, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+				}
+				if convertedVMSpec.CloudInit.NetworkConfig != nil {
+					for i, eth := range convertedVMSpec.CloudInit.NetworkConfig.Ethernets {
+						for j, addr := range eth.Addresses {
+							convertedVMSpec.CloudInit.NetworkConfig.Ethernets[i].Addresses[j] = strings.ReplaceAll(addr, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+						}
+						convertedVMSpec.CloudInit.NetworkConfig.Ethernets[i].Gateway4 = strings.ReplaceAll(eth.Gateway4, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
+					}
+				}
+			}
+		}
 		request = &providerv1.VMCreateRequest{
-			Name: ref.Name,
-			Spec: e.convertVMSpec(renderedSpec.Spec),
+			Name:         prefixedName(isoConfig, ref.Name),
+			Spec:         convertedVMSpec,
 			ProviderSpec: renderedSpec.ProviderSpec,
 		}
 		if providerName == "" {
@@ -403,6 +449,7 @@ func (e *Executor) deleteResource(
 	ctx context.Context,
 	ref v1.ResourceRef,
 	envState *v1.EnvironmentState,
+	isoConfig *IsolationConfig,
 ) error {
 	// Lock to protect state reads during parallel execution
 	e.mu.Lock()
@@ -432,9 +479,9 @@ func (e *Executor) deleteResource(
 		return fmt.Errorf("unknown resource kind: %s", ref.Kind)
 	}
 
-	// Create delete request
+	// Create delete request with prefixed name for provider isolation
 	request := &providerv1.DeleteRequest{
-		Name: ref.Name,
+		Name: prefixedName(isoConfig, ref.Name),
 	}
 
 	// Call the provider
