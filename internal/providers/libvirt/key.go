@@ -71,9 +71,16 @@ func (p *Provider) KeyCreate(req *providerv1.KeyCreateRequest) *providerv1.Opera
 	// Calculate fingerprint
 	fingerprint := ssh.FingerprintSHA256(publicKey)
 
-	// Determine file paths
-	privateKeyPath := filepath.Join(p.config.StateDir, "keys", req.Name)
-	publicKeyPath := filepath.Join(p.config.StateDir, "keys", req.Name+".pub")
+	// Determine file paths - use OutputDir from spec if set, otherwise provider's state dir
+	keyDir := filepath.Join(p.config.StateDir, "keys")
+	if req.Spec.OutputDir != "" {
+		keyDir = req.Spec.OutputDir
+		if err := os.MkdirAll(keyDir, 0o755); err != nil {
+			return providerv1.ErrorResult(providerv1.NewProviderError("failed to create key output directory: "+err.Error(), false))
+		}
+	}
+	privateKeyPath := filepath.Join(keyDir, req.Name)
+	publicKeyPath := filepath.Join(keyDir, req.Name+".pub")
 
 	// Write private key (mode 0600)
 	if err := os.WriteFile(privateKeyPath, privateKeyPEM, 0600); err != nil {

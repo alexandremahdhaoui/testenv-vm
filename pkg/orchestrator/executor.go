@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -256,13 +257,20 @@ func (e *Executor) createResource(
 		if err != nil {
 			return fmt.Errorf("failed to render key spec: %w", err)
 		}
+		// Default OutputDir to spec.StateDir + "/keys" when not explicitly set.
+		// This ensures key files end up in the spec-defined state directory
+		// rather than the provider's own default state directory.
+		outputDir := renderedSpec.Spec.OutputDir
+		if outputDir == "" && spec.StateDir != "" {
+			outputDir = filepath.Join(spec.StateDir, "keys")
+		}
 		request = &providerv1.KeyCreateRequest{
 			Name: prefixedName(isoConfig, ref.Name),
 			Spec: providerv1.KeySpec{
 				Type:      renderedSpec.Spec.Type,
 				Bits:      renderedSpec.Spec.Bits,
 				Comment:   renderedSpec.Spec.Comment,
-				OutputDir: renderedSpec.Spec.OutputDir,
+				OutputDir: outputDir,
 			},
 			ProviderSpec: renderedSpec.ProviderSpec,
 		}
