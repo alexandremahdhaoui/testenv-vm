@@ -1,43 +1,29 @@
-# testenv-vm: VM Test Environment Engine for Forge
+# testenv-vm
 
-**Provider-Based VM Test Environment Engine Enables Real Infrastructure Testing**
+**A Forge testenv engine that provisions virtual machines, networks, and SSH keys for infrastructure testing.**
 
-`testenv-vm` is a Forge testenv subengine that provisions virtual machines, networks, and SSH keys for end-to-end testing. The engine uses a provider-based architecture where testenv-vm orchestrates resource creation while delegating actual provisioning to pluggable provider MCP servers (libvirt, QEMU, AWS).
-
-"I needed to test iPXE boot server against real VMs that boot from network, not containers",  "testenv-vm lets me define VMs, networks with DHCP/TFTP, and SSH keys in forge.yaml. The engine handles dependency ordering and cleanup automatically."
-
-testenv-vm solves the infrastructure testing gap for systems requiring actual VMs: PXE/iPXE boot servers, bare-metal provisioning tools, network services needing isolated topologies, and infrastructure controllers requiring specific hardware characteristics.
-
-## Table of Contents
-
-- [What problem does testenv-vm solve?](#what-problem-does-testenv-vm-solve)
-- [How do I add testenv-vm to my project?](#how-do-i-add-testenv-vm-to-my-project)
-- [Which providers are supported?](#which-providers-are-supported)
-- [How do I configure the libvirt provider?](#how-do-i-configure-the-libvirt-provider)
-- [How does dependency resolution work?](#how-does-dependency-resolution-work)
-- [What happens if VM creation fails?](#what-happens-if-vm-creation-fails)
-- [How do I test PXE boot scenarios?](#how-do-i-test-pxe-boot-scenarios)
-- [How do I create VMs at runtime?](#how-do-i-create-vms-at-runtime)
-- [Can I use multiple providers in one environment?](#can-i-use-multiple-providers-in-one-environment)
-- [Why a provider-based architecture instead of direct implementation?](#why-a-provider-based-architecture-instead-of-direct-implementation)
-- [Why MCP for provider communication?](#why-mcp-for-provider-communication)
-- [How does testenv-vm integrate with Forge's testenv interface?](#how-does-testenv-vm-integrate-with-forges-testenv-interface)
-- [What are the system requirements?](#what-are-the-system-requirements)
-- [How is state managed across create/delete calls?](#how-is-state-managed-across-createdelete-calls)
-- [What readiness checks are supported?](#what-readiness-checks-are-supported)
-- [Quick Start](#quick-start)
-- [Documentation](#documentation)
-- [License](#license)
+> "I test PXE boot servers against real VMs that boot from network, not containers.
+> testenv-vm lets me declare VMs, networks with DHCP/TFTP, and SSH keys in forge.yaml.
+> The engine handles dependency ordering, parallel execution, and cleanup automatically."
+> -- Infrastructure Engineer
 
 ## What problem does testenv-vm solve?
 
-Many systems require testing against actual virtual machines rather than containers. Previously, users had to implement custom infrastructure management: VM lifecycle, network bridges, DHCP/TFTP servers, SSH key distribution, and cleanup. testenv-vm handles all of this through a declarative configuration.
+Infrastructure testing (PXE boot, bare-metal provisioning, network services) requires real VMs, not containers.
+Each project builds custom VM lifecycle management: domain XML, QCOW2 overlays, cloud-init ISOs, bridge networking, DHCP/TFTP, SSH key distribution, cleanup.
+How do you get declarative, provider-agnostic VM test environments with automatic dependency resolution?
+testenv-vm handles it through `forge.yaml` configuration.
+It manages 3 resource types (keys, networks, VMs), supports 3 network kinds (bridge, libvirt, dnsmasq), 3 key types (rsa, ed25519, ecdsa), and exposes 13 Model Context Protocol (MCP) tools per provider.
 
-## How do I add testenv-vm to my project?
+## Quick Start
 
-Add a testenv configuration to your forge.yaml:
+```bash
+# Install forge
+go install github.com/alexandremahdhaoui/forge/cmd/forge@latest
+```
 
 ```yaml
+# forge.yaml
 engines:
   - alias: e2e-testenv
     type: testenv
@@ -66,120 +52,170 @@ engines:
                       sshAuthorizedKeys: ["{{ .Keys.vm-ssh.PublicKey }}"]
 ```
 
-## Which providers are supported?
+```bash
+# Run tests with VM infrastructure
+forge test e2e
+```
 
-The mid-term goal is to support these three providers:
+## How does it work?
 
-- **libvirt**: Full-featured local virtualization with KVM/QEMU, Linux bridges, dnsmasq
-- **QEMU**: Lightweight direct QEMU process management without libvirt
-- **AWS**: EC2 instances, VPCs, subnets, and security groups
+```
++-------------------------------------------------------------------+
+|                       Forge Test Runner                            |
++-------------------------------------------------------------------+
+                              |
+                              | MCP: "create" / "delete"
+                              v
++-------------------------------------------------------------------+
+|                   testenv-vm MCP Server                            |
+|                                                                    |
+|  +----------------+  +-------------+  +------------------------+   |
+|  | Spec Parser    |  | DAG Builder |  | Executor               |   |
+|  | - Validate     |  | - Deps graph|  | - Parallel phases      |   |
+|  | - Template     |  | - Topo sort |  | - Rollback on failure  |   |
+|  +----------------+  +-------------+  +------------------------+   |
+|                                                                    |
+|  +--------------------------------------------------------------+  |
+|  |                    Provider Manager                           |  |
+|  |  - Start/stop provider MCP servers                            |  |
+|  |  - Route operations to providers                              |  |
+|  +--------------------------------------------------------------+  |
++-------------------------------------------------------------------+
+          |                                    |
+          | MCP                                | MCP
+          v                                    v
++------------------+                +------------------+
+| Libvirt Provider |                |  Stub Provider   |
+| - vm, network    |                | - In-memory mock |
+| - key            |                | - E2E testing    |
++------------------+                +------------------+
+```
 
-## How do I configure the libvirt provider?
+Forge calls testenv-vm's `create` MCP tool with a spec. The orchestrator parses the spec, builds a Directed Acyclic Graph (DAG) from template references, and executes resources in parallel phases. Each provider runs as a separate MCP server process, enabling process isolation and independent versioning. See [DESIGN.md](./DESIGN.md) for the full technical design.
 
-See the [Libvirt Provider Documentation](./docs/libvirt-provider.md) for detailed configuration options, system requirements, network types, cloud-init setup, and troubleshooting.
+## Table of Contents
+
+- [How do I configure?](#how-do-i-configure)
+- [How do I build and test?](#how-do-i-build-and-test)
+- [How does dependency resolution work?](#how-does-dependency-resolution-work)
+- [How do I create VMs at runtime?](#how-do-i-create-vms-at-runtime)
+- [How do I test PXE boot scenarios?](#how-do-i-test-pxe-boot-scenarios)
+- [FAQ](#faq)
+- [Documentation](#documentation)
+- [License](#license)
+
+## How do I configure?
+
+Configuration lives in `forge.yaml` under the `testenv` section.
+
+**Resource types:**
+- **Keys** -- 3 types: rsa, ed25519, ecdsa. Generate SSH key pairs for VM access.
+- **Networks** -- 3 kinds: bridge (Linux bridge), libvirt (virsh net-define), dnsmasq (DHCP/TFTP).
+- **VMs** -- Define memory, vCPUs, disk, cloud-init, boot order, and readiness checks.
+
+Template references (e.g., `{{ .Keys.vm-ssh.PublicKey }}`) link resources and drive dependency resolution.
+
+See [Libvirt Provider](./docs/libvirt-provider.md) for provider-specific configuration options.
+
+## How do I build and test?
+
+4 build targets: `testenv-vm`, `testenv-vm-provider-stub`, `testenv-vm-provider-libvirt`, `generate-testenv-vm`.
+
+8 test stages: 3 lint (`lint-tags`, `lint-licenses`, `lint`), 1 unit, 1 integration, 3 e2e (`e2e`, `e2e_libvirt`, `e2e_libvirt_delete`).
+
+```bash
+forge build                    # Build all artifacts
+forge test-all                 # Run all test stages
+forge test run unit            # Run a specific stage
+forge test run e2e             # Run stub-based E2E tests
+forge test run e2e_libvirt     # Run libvirt E2E tests (requires libvirt)
+```
 
 ## How does dependency resolution work?
 
-testenv-vm analyzes template references (e.g., `{{ .Keys.vm-ssh.PublicKey }}`) to build a dependency graph. Resources are created in phases: independent resources run in parallel, dependent resources wait for their dependencies. Templates are rendered just-in-time with values from completed resources.
+Template references (e.g., `{{ .Keys.vm-ssh.PublicKey }}`) define edges in a DAG. Topological sort produces execution phases. Resources within a phase execute in parallel. Phases execute sequentially.
 
-## What happens if VM creation fails?
+Templates render just-in-time: immediately before resource creation, using values from already-completed resources. This prevents forward references and ensures deterministic execution order.
 
-If `cleanupOnFailure: true` (default), testenv-vm destroys created resources in reverse dependency order. If `false`, resources remain for debugging. Cleanup uses best-effort: failures are logged but don't block cleanup of other resources.
+## How do I create VMs at runtime?
+
+Use `client.NewClient` with `WithProvisioner` to create VMs during test execution:
+
+```go
+result, _ := orchestrator.Create(ctx, input)
+
+c, _ := client.NewClient(result.Provisioner, "control-plane",
+    client.WithProvisioner(result.Provisioner))
+
+worker, _ := c.CreateVM(ctx, "worker-1", v1.VMSpec{
+    Memory: 2048, VCPUs: 2, Network: "test-net",
+})
+worker.WaitReady(ctx, 2*time.Minute)
+```
+
+Runtime VMs integrate with existing resources via templates and are cleaned up automatically. See [Runtime VM Creation](./docs/runtime-vm-creation.md) for details.
 
 ## How do I test PXE boot scenarios?
 
-Configure a dnsmasq network with TFTP enabled:
+Configure a dnsmasq network with DHCP/TFTP:
 
 ```yaml
 networks:
   - name: pxe-services
     kind: dnsmasq
     spec:
-      dhcp: { enabled: true, rangeStart: "192.168.200.50", rangeEnd: "192.168.200.100" }
-      tftp: { enabled: true, root: "./tftp", bootFile: "undionly.kpxe" }
+      dhcp:
+        enabled: true
+        rangeStart: "192.168.200.50"
+        rangeEnd: "192.168.200.100"
+      tftp:
+        enabled: true
+        root: "./tftp"
+        bootFile: "undionly.kpxe"
 vms:
   - name: pxe-client
     spec:
       boot: { order: [network, hd], firmware: bios }
 ```
 
-## How do I create VMs at runtime?
+## FAQ
 
-Use the `RuntimeProvisioner` returned from `Orchestrator.Create()` to create VMs during test execution:
+**What providers are available?**
+Libvirt (full-featured local virtualization) and stub (in-memory mock for E2E testing). Each provider exposes 13 MCP tools covering 3 resource types.
 
-```go
-result, _ := orchestrator.Create(ctx, input)
-client, _ := client.NewClient(result.Provisioner, "control-plane",
-    client.WithProvisioner(result.Provisioner))
+**What readiness checks are supported?**
+SSH (wait for SSH server), TCP (wait for port), and CloudInit (wait for cloud-init completion via SSH). SSH confirms both network connectivity and guest OS readiness.
 
-worker, _ := client.CreateVM(ctx, "worker-1", v1.VMSpec{
-    Memory:  2048,
-    VCPUs:   2,
-    Network: "test-net",
-    Disk:    v1.DiskSpec{Size: "10G"},
-    CloudInit: &v1.CloudInitSpec{
-        Users: []v1.UserSpec{{
-            Name:              "ubuntu",
-            SSHAuthorizedKeys: []string{"{{ .Keys.vm-ssh.PublicKey }}"},
-        }},
-    },
-})
-worker.WaitReady(ctx, 2*time.Minute)
-```
+**What happens if VM creation fails?**
+When `cleanupOnFailure` is `true` (default), testenv-vm destroys created resources in reverse dependency order. Best-effort deletion continues through individual failures.
 
-Runtime VMs integrate with existing resources via templates and are automatically cleaned up. See [Runtime VM Creation](./docs/runtime-vm-creation.md) for details.
+**How is state managed?**
+JSON files in `stateDir` (default `.forge/testenv-vm`). State persistence enables reliable cleanup across process restarts.
 
-## Can I use multiple providers in one environment?
+**Can I use multiple providers?**
+Yes. Each resource specifies its provider. Different resources in the same environment can use different providers.
 
-Yes. Each resource specifies its provider. You might use libvirt for local VMs and AWS for cloud resources in the same test environment.
+**What are the system requirements?**
+Linux, libvirt 6.0+, QEMU/KVM, sudo access for bridge creation. The stub provider has no system requirements.
 
-## Why a provider-based architecture instead of direct implementation?
-
-A: Separation of concerns. The orchestrator handles spec parsing, dependency resolution, and parallel execution. Providers handle infrastructure-specific logic. This enables adding new providers (GCP, Azure, Firecracker) without modifying the core engine.
-
-## Why MCP for provider communication?
-
-A: Forge already uses MCP for engine communication. Using the same protocol for providers maintains consistency, enables process isolation, and allows providers to be developed and versioned independently.
-
-## How does testenv-vm integrate with Forge's testenv interface?
-
-testenv-vm implements two MCP tools: `create` and `delete`. Forge calls `create` with a `CreateInput` containing testID, stage, tmpDir, and spec. testenv-vm returns a `TestEnvArtifact` with files, metadata, and environment variables for subsequent test runners.
-
-## What are the system requirements?
-
-Linux is required for libvirt and QEMU providers. Specific requirements:
-
-- Libvirt provider: libvirt 6.0+, QEMU/KVM, sudo access for bridge creation
-- QEMU provider: QEMU 6.0+, KVM access (or TCG for software emulation)
-- AWS provider: AWS CLI 2.x, configured credentials
-
-## How is state managed across create/delete calls?
-
-A: State is persisted to `stateDir` (default `.forge/testenv-vm`). The state includes spec, provider status, resource states, execution plan, and artifact paths. This enables reliable cleanup even if the orchestrator restarts.
-
-## What readiness checks are supported?
-
-A: Three check types: SSH (wait for SSH server), TCP (wait for port), and CloudInit (wait for cloud-init completion via SSH). SSH is recommended as it confirms both network connectivity and guest OS readiness.
-
----
-
-## Quick Start
-
-```bash
-# Install forge (if not already installed)
-go install github.com/alexandremahdhaoui/forge/cmd/forge@latest
-
-# Run tests with VM infrastructure
-forge test e2e
-```
+**Why MCP for provider communication?**
+Forge uses MCP for engine communication. Using the same protocol for providers maintains consistency, enables process isolation, and allows independent versioning.
 
 ## Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - System design and component diagrams
-- [Runtime VM Creation](./docs/runtime-vm-creation.md) - Creating VMs dynamically during tests
-- [Libvirt Provider](./docs/libvirt-provider.md) - Libvirt provider configuration
-- [Provider Interface](./api/provider/v1/) - Provider MCP tool specifications
-- [Examples](./examples/) - Sample configurations for common scenarios
+**User guides:**
+- [Libvirt Provider](./docs/libvirt-provider.md) -- configuration, network types, cloud-init, troubleshooting
+- [Runtime VM Creation](./docs/runtime-vm-creation.md) -- dynamic VM provisioning during tests
+
+**Design:**
+- [DESIGN.md](./DESIGN.md) -- architecture, data model, protocol details
+
+**API:**
+- [Provider Interface](./api/provider/v1/) -- provider MCP tool specifications
+
+## Contributing
+
+Contributions welcome. Open an issue or pull request.
 
 ## License
 
