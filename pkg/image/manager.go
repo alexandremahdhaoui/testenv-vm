@@ -118,8 +118,8 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		expectedSHA256 = spec.Sha256
 	}
 
-	// Compute cache key from source
-	key := m.cacheKey(source)
+	// Compute cache key from source (and customize spec if present)
+	key := m.cacheKeyWithCustomize(source, &spec.Customize)
 
 	// Acquire file-based lock for cross-process safety
 	lockFile, err := m.acquireFileLock(key)
@@ -151,6 +151,98 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 			}
 		}
 		// File missing or corrupted - fall through to download
+	}
+
+	// Customize flow: build a pre-customized qcow2 overlay from a base image.
+	if len(spec.Customize.Packages) > 0 || len(spec.Customize.Runcmd) > 0 {
+		// Check virt-customize availability
+		if err := checkVirtCustomize(); err != nil {
+			return nil, err
+		}
+
+		// Ensure base image (recursive call with no customize).
+		// Uses a different cache key (cacheKey(source) vs cacheKeyWithCustomize),
+		// so it acquires a different lock file. No deadlock risk.
+		baseSpec := v1.ImageSpec{Source: spec.Source, Sha256: spec.Sha256}
+		baseState, err := m.EnsureImage(ctx, name+"-base", baseSpec)
+		if err != nil {
+			return nil, fmt.Errorf("ensuring base image for customization: %w", err)
+		}
+
+		// Create image directory
+		imageDir := m.imageDirName(name)
+		if err := os.MkdirAll(imageDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating image directory: %w", err)
+		}
+
+		localPath := filepath.Join(imageDir, name+".qcow2")
+
+		// Update metadata to customizing
+		m.mu.Lock()
+		m.metadata.Images[key] = &ImageState{
+			Name:      name,
+			Source:    source,
+			LocalPath: localPath,
+			Status:    StatusCustomizing,
+		}
+		if err := m.saveMetadata(); err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("saving metadata: %w", err)
+		}
+		m.mu.Unlock()
+
+		// Create qcow2 overlay backed by base image
+		if err := createQcow2Overlay(baseState.LocalPath, localPath); err != nil {
+			cleanupPartialImage(localPath)
+			m.mu.Lock()
+			m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}
+			_ = m.saveMetadata()
+			m.mu.Unlock()
+			return nil, fmt.Errorf("creating overlay: %w", err)
+		}
+
+		// Run virt-customize
+		if err := runVirtCustomize(ctx, localPath, &spec.Customize); err != nil {
+			cleanupPartialImage(localPath)
+			m.mu.Lock()
+			m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}
+			_ = m.saveMetadata()
+			m.mu.Unlock()
+			return nil, fmt.Errorf("customizing image: %w", err)
+		}
+
+		// Compute checksum and file info
+		checksum, err := m.computeChecksum(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("computing checksum: %w", err)
+		}
+
+		fileInfo, err := os.Stat(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat image: %w", err)
+		}
+
+		// Update metadata to ready
+		state := &ImageState{
+			Name:         name,
+			Source:       source,
+			LocalPath:    localPath,
+			SHA256:       checksum,
+			Size:         fileInfo.Size(),
+			DownloadedAt: time.Now(),
+			Status:       StatusReady,
+		}
+
+		m.mu.Lock()
+		m.metadata.Images[key] = state
+		m.metadata.UpdatedAt = time.Now()
+		if err := m.saveMetadata(); err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("saving metadata: %w", err)
+		}
+		m.mu.Unlock()
+
+		return state, nil
 	}
 
 	// Cache miss or corrupted - need to download
@@ -352,6 +444,19 @@ func (m *CacheManager) releaseFileLock(f *os.File) error {
 // regardless of how the source is formatted.
 func (m *CacheManager) cacheKey(source string) string {
 	h := sha256.Sum256([]byte(source))
+	return hex.EncodeToString(h[:])
+}
+
+// cacheKeyWithCustomize computes a cache key that incorporates both the source
+// and the customization spec. If customize is nil, falls back to the base cacheKey.
+// json.Marshal of a Go struct is deterministic (fields in declaration order).
+func (m *CacheManager) cacheKeyWithCustomize(source string, customize *v1.ImageCustomizeSpec) string {
+	if customize == nil || (len(customize.Packages) == 0 && len(customize.Runcmd) == 0) {
+		return m.cacheKey(source)
+	}
+	customizeJSON, _ := json.Marshal(customize)
+	combined := source + "|customize|" + string(customizeJSON)
+	h := sha256.Sum256([]byte(combined))
 	return hex.EncodeToString(h[:])
 }
 

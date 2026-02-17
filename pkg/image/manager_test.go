@@ -669,3 +669,74 @@ func TestCacheManager_MetadataPersistence(t *testing.T) {
 		t.Errorf("GetImagePath() path = %q, want %q", path, state1.LocalPath)
 	}
 }
+
+func TestCacheKeyWithCustomize_NilReturnsBaseKey(t *testing.T) {
+	m, err := NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCacheManager() unexpected error: %v", err)
+	}
+
+	got := m.cacheKeyWithCustomize("ubuntu:24.04", nil)
+	want := m.cacheKey("ubuntu:24.04")
+
+	if got != want {
+		t.Errorf("cacheKeyWithCustomize(source, nil) = %q, want base cacheKey %q", got, want)
+	}
+}
+
+func TestCacheKeyWithCustomize_DifferentSpecsDifferentKeys(t *testing.T) {
+	m, err := NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCacheManager() unexpected error: %v", err)
+	}
+
+	spec1 := v1.ImageCustomizeSpec{Packages: []string{"curl"}, Runcmd: []string{"echo a"}}
+	spec2 := v1.ImageCustomizeSpec{Packages: []string{"wget"}, Runcmd: []string{"echo b"}}
+
+	key1 := m.cacheKeyWithCustomize("ubuntu:24.04", &spec1)
+	key2 := m.cacheKeyWithCustomize("ubuntu:24.04", &spec2)
+	baseKey := m.cacheKey("ubuntu:24.04")
+
+	if key1 == key2 {
+		t.Errorf("Different specs should produce different keys, both got %q", key1)
+	}
+	if key1 == baseKey {
+		t.Errorf("key1 should differ from base key, both got %q", key1)
+	}
+	if key2 == baseKey {
+		t.Errorf("key2 should differ from base key, both got %q", key2)
+	}
+}
+
+func TestCacheKeyWithCustomize_SameSpecSameKey(t *testing.T) {
+	m, err := NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCacheManager() unexpected error: %v", err)
+	}
+
+	specA := v1.ImageCustomizeSpec{Packages: []string{"curl", "wget"}, Runcmd: []string{"echo hello"}}
+	specB := v1.ImageCustomizeSpec{Packages: []string{"curl", "wget"}, Runcmd: []string{"echo hello"}}
+
+	keyA := m.cacheKeyWithCustomize("ubuntu:24.04", &specA)
+	keyB := m.cacheKeyWithCustomize("ubuntu:24.04", &specB)
+
+	if keyA != keyB {
+		t.Errorf("Identical specs should produce same key: got %q and %q", keyA, keyB)
+	}
+}
+
+func TestCacheKeyWithCustomize_DifferentSourcesDifferentKeys(t *testing.T) {
+	m, err := NewCacheManager(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewCacheManager() unexpected error: %v", err)
+	}
+
+	spec := v1.ImageCustomizeSpec{Packages: []string{"curl"}, Runcmd: []string{"echo a"}}
+
+	key1 := m.cacheKeyWithCustomize("ubuntu:24.04", &spec)
+	key2 := m.cacheKeyWithCustomize("ubuntu:22.04", &spec)
+
+	if key1 == key2 {
+		t.Errorf("Different sources should produce different keys, both got %q", key1)
+	}
+}

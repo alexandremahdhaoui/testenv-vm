@@ -22,6 +22,8 @@ const (
 	StatusReady = "ready"
 	// StatusDownloading indicates the image is currently being downloaded.
 	StatusDownloading = "downloading"
+	// StatusCustomizing indicates the image is being customized via virt-customize.
+	StatusCustomizing = "customizing"
 	// StatusFailed indicates the image download or verification failed.
 	StatusFailed = "failed"
 )
@@ -48,7 +50,7 @@ type ImageState struct {
 	// DownloadedAt is the timestamp when the image was downloaded.
 	DownloadedAt time.Time `json:"downloadedAt"`
 	// Status indicates the current state of the image.
-	// Valid values are: "ready", "downloading", "failed".
+	// Valid values are: "ready", "downloading", "customizing", "failed".
 	Status string `json:"status"`
 }
 
