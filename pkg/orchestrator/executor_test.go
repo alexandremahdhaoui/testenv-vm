@@ -822,44 +822,51 @@ func TestExecutor_convertNetworkSpec(t *testing.T) {
 	}
 }
 
-func TestExecutor_convertNetworkSpec_NilSubspecs(t *testing.T) {
+func TestExecutor_convertNetworkSpec_ZeroSubspecs(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
 		Cidr: "192.168.1.0/24",
-		// All sub-specs are nil (pointer types)
+		// All sub-specs are zero values (unconfigured)
 	}
 
 	result := executor.convertNetworkSpec(spec)
 
+	// Zero-value sub-specs are treated as "unconfigured" (nil).
+	// The provider applies its own defaults (e.g. libvirt enables DHCP).
 	if result.DHCP != nil {
-		t.Error("DHCP should be nil when Dhcp pointer is nil")
+		t.Error("DHCP should be nil for zero-value (unconfigured) spec")
 	}
 	if result.DNS != nil {
-		t.Error("DNS should be nil when Dns pointer is nil")
+		t.Error("DNS should be nil for zero-value (unconfigured) spec")
 	}
 	if result.TFTP != nil {
-		t.Error("TFTP should be nil when Tftp pointer is nil")
+		t.Error("TFTP should be nil for zero-value (unconfigured) spec")
 	}
 }
 
-func TestExecutor_convertNetworkSpec_ExplicitDisable(t *testing.T) {
+func TestExecutor_convertNetworkSpec_ExplicitConfig(t *testing.T) {
 	executor := newTestExecutor(t)
 
 	spec := v1.NetworkSpec{
 		Cidr: "192.168.1.0/24",
 		Dhcp: &v1.DHCPSpec{
-			Enabled: false,
+			Enabled:    false,
+			RangeStart: "192.168.1.10",
 		},
 	}
 
 	result := executor.convertNetworkSpec(spec)
 
+	// Non-zero sub-spec fields trigger explicit config creation.
 	if result.DHCP == nil {
-		t.Fatal("DHCP should not be nil when explicitly set")
+		t.Fatal("DHCP should not be nil when fields are set")
 	}
 	if result.DHCP.Enabled {
-		t.Error("DHCP.Enabled should be false when explicitly disabled")
+		t.Error("DHCP.Enabled should be false")
+	}
+	if result.DHCP.RangeStart != "192.168.1.10" {
+		t.Errorf("DHCP.RangeStart = %q, want %q", result.DHCP.RangeStart, "192.168.1.10")
 	}
 }
 

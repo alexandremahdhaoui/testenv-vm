@@ -105,8 +105,26 @@ components:
         alias:
           type: string
           description: Optional alternative name for template references.
+        customize:
+          $ref: '#/components/schemas/ImageCustomizeSpec'
       required:
         - source
+
+    ImageCustomizeSpec:
+      type: object
+      nullable: true
+      description: Offline image customization via virt-customize. When set, CacheManager builds a pre-customized qcow2 overlay.
+      properties:
+        packages:
+          type: array
+          description: APT packages to pre-install via virt-customize --install.
+          items:
+            type: string
+        runcmd:
+          type: array
+          description: Shell commands to execute offline via virt-customize --run-command.
+          items:
+            type: string
 
     KeyResource:
       type: object

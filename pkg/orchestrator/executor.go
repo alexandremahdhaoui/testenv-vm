@@ -632,8 +632,10 @@ func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpe
 		MTU:      spec.Mtu,
 	}
 
-	// Dhcp is *DHCPSpec: nil means "not specified" (provider defaults to enabled),
-	// non-nil with Enabled=false means "explicitly disabled".
+	// Only pass DHCP/DNS/TFTP config when explicitly configured.
+	// The generated spec uses pointer types for nullable sub-specs;
+	// nil means "unconfigured" and lets the provider apply its defaults
+	// (e.g. libvirt defaults DHCP to enabled).
 	if spec.Dhcp != nil {
 		result.DHCP = &providerv1.DHCPSpec{
 			Enabled:    spec.Dhcp.Enabled,
