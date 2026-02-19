@@ -16,12 +16,14 @@ package image
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
+	"golang.org/x/sys/unix"
 )
 
 func checkVirtCustomize() error {
@@ -29,6 +31,34 @@ func checkVirtCustomize() error {
 	if err != nil {
 		return fmt.Errorf("virt-customize not found in PATH; install libguestfs-tools (apt-get install libguestfs-tools)")
 	}
+	return nil
+}
+
+func checkKernelReadable() error {
+	var buf unix.Utsname
+	if err := unix.Uname(&buf); err != nil {
+		return fmt.Errorf("uname failed: %w", err)
+	}
+
+	release := strings.TrimRight(string(buf.Release[:]), "\x00")
+	kernelPath := "/boot/vmlinuz-" + release
+
+	f, err := os.Open(kernelPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf(
+				"kernel %s is not readable by the current user; "+
+					"libguestfs/supermin requires read access to the kernel to build its appliance. "+
+					"Fix: sudo chmod 644 /boot/vmlinuz-*",
+				kernelPath,
+			)
+		}
+		return fmt.Errorf("checking kernel readability: %w", err)
+	}
+	_ = f.Close()
 	return nil
 }
 
@@ -42,6 +72,10 @@ func createQcow2Overlay(basePath, overlayPath string) error {
 }
 
 func runVirtCustomize(ctx context.Context, imagePath string, spec *v1.ImageCustomizeSpec) error {
+	if err := checkKernelReadable(); err != nil {
+		return err
+	}
+
 	virtArgs := []string{"-a", imagePath}
 
 	if len(spec.Packages) > 0 {
