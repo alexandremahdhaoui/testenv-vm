@@ -1,17 +1,41 @@
 # testenv-vm development environment
 
-# Add forge build tools to PATH (required for go-build, go-test engines)
-export PATH=~/workspaces/forge/build/bin:"${PATH}"
-
 # Add build output to PATH
 export PATH="${PWD}/build/bin:${PATH}"
 
-# Disable local development mode for Forge - use pre-built binaries from PATH instead
-# The forge binaries must be built and available in PATH (added above from forge/build/bin)
-export FORGE_RUN_LOCAL_ENABLED=false
+export ELEVATED_PREPEND_CMD="sudo -E"
 
-# Source any local overrides
-if [ -f .envrc.local ]; then
-  source .envrc.local
+# Enable local forge development only when inside a Go workspace containing the forge repo.
+# Walks up from PWD to find go.work, parses its module paths via `go work edit -json`,
+# then verifies the repo is forge by checking the git remote URL.
+_find_forge_in_workspace() {
+  local dir="${PWD}"
+  while [ "${dir}" != "/" ]; do
+    if [ -f "${dir}/go.work" ]; then
+      local disk_path
+      for disk_path in $(cd "${dir}" && go work edit -json 2>/dev/null | sed -n 's/.*"DiskPath": "\([^"]*\)".*/\1/p'); do
+        case "${disk_path}" in
+          /*) ;;
+          *)  disk_path="${dir}/${disk_path}" ;;
+        esac
+        [ -d "${disk_path}/.git" ] || continue
+        local repo_name
+        repo_name="$(basename "$(git -C "${disk_path}" remote get-url origin 2>/dev/null)" .git)"
+        if [ "${repo_name}" = "forge" ]; then
+          printf '%s' "${disk_path}"
+          return 0
+        fi
+      done
+      return 1
+    fi
+    dir="$(dirname "${dir}")"
+  done
+  return 1
+}
+
+FORGE_DIR="$(_find_forge_in_workspace)"
+if [ -n "${FORGE_DIR}" ]; then
+  export FORGE_RUN_LOCAL_ENABLED=true
+  export FORGE_RUN_LOCAL_BASEDIR="${FORGE_DIR}"
 fi
-
+unset -f _find_forge_in_workspace
