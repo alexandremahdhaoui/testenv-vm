@@ -176,7 +176,7 @@ func (p *Provider) NetworkDelete(name string) *providerv1.OperationResult {
 	// (only if we have state - if we don't, we can't know about VMs)
 	if exists {
 		for _, vm := range p.vms {
-			if netName, ok := vm.ProviderState["network"].(string); ok && netName == name {
+			if vmUsesNetwork(vm, name) {
 				return providerv1.ErrorResult(providerv1.NewResourceBusyError("network", name))
 			}
 		}
@@ -198,6 +198,36 @@ func (p *Provider) NetworkDelete(name string) *providerv1.OperationResult {
 
 	// Always return success for idempotent delete
 	return providerv1.SuccessResult(nil)
+}
+
+// vmUsesNetwork checks if a VM's ProviderState references the given network name.
+// Handles both the legacy "network" (string) and new "networks" ([]string or []any) keys.
+func vmUsesNetwork(vm *providerv1.VMState, networkName string) bool {
+	if vm == nil || vm.ProviderState == nil {
+		return false
+	}
+	// Check new "networks" key ([]string stored as []any after JSON round-trip)
+	if nets, ok := vm.ProviderState["networks"]; ok {
+		switch v := nets.(type) {
+		case []string:
+			for _, n := range v {
+				if n == networkName {
+					return true
+				}
+			}
+		case []any:
+			for _, n := range v {
+				if s, ok := n.(string); ok && s == networkName {
+					return true
+				}
+			}
+		}
+	}
+	// Check legacy "network" key (single string)
+	if netName, ok := vm.ProviderState["network"].(string); ok && netName == networkName {
+		return true
+	}
+	return false
 }
 
 // formatUUID formats a UUID byte array as a string.

@@ -114,7 +114,15 @@ func generateUserData(config *CloudInitConfig) string {
 	// Run commands (always include boot-finished marker)
 	sb.WriteString("\nruncmd:\n")
 	for _, cmd := range config.Runcmd {
-		sb.WriteString(fmt.Sprintf("  - %s\n", cmd))
+		if strings.Contains(cmd, "\n") {
+			// Multiline commands need YAML literal block scalar syntax
+			sb.WriteString("  - |\n")
+			for _, line := range strings.Split(strings.TrimRight(cmd, "\n"), "\n") {
+				sb.WriteString(fmt.Sprintf("    %s\n", line))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("  - %s\n", cmd))
+		}
 	}
 	sb.WriteString("  - touch /var/lib/cloud/instance/boot-finished\n")
 

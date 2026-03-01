@@ -342,17 +342,25 @@ func validateResourceRefs(spec *v1.Spec, templatedFields *TemplatedFields) error
 		}
 	}
 
-	// Check VM network references
+	// Check VM network references.
+	// Networks takes precedence over Network for validation.
 	for _, vm := range spec.Vms {
-		if vm.Spec.Network != "" {
-			if IsTemplated(vm.Spec.Network) {
+		netNames := vm.Spec.Networks
+		if len(netNames) == 0 && vm.Spec.Network != "" {
+			netNames = []string{vm.Spec.Network}
+		}
+		for _, netName := range netNames {
+			if netName == "" {
+				continue
+			}
+			if IsTemplated(netName) {
 				// Mark for Phase 2 validation
 				templatedFields.VMNetwork[vm.Name] = true
 				continue
 			}
 			// Literal value - validate now
-			if !networkNames[vm.Spec.Network] {
-				return fmt.Errorf("vm %q: network %q not found", vm.Name, vm.Spec.Network)
+			if !networkNames[netName] {
+				return fmt.Errorf("vm %q: network %q not found", vm.Name, netName)
 			}
 		}
 	}
@@ -548,8 +556,12 @@ func ValidateResourceRefsLate(
 			return fmt.Errorf("invalid vm spec type")
 		}
 
-		network := vmSpec.Spec.Network
-		if network == "" {
+		// Collect network names to validate: Networks takes precedence.
+		netNames := vmSpec.Spec.Networks
+		if len(netNames) == 0 && vmSpec.Spec.Network != "" {
+			netNames = []string{vmSpec.Spec.Network}
+		}
+		if len(netNames) == 0 {
 			return nil // Empty is valid (optional field)
 		}
 
@@ -559,14 +571,19 @@ func ValidateResourceRefsLate(
 			networkNames[n.Name] = true
 		}
 
-		// Verify resolved value is a valid network name
-		if !networkNames[network] {
-			var available []string
-			for name := range networkNames {
-				available = append(available, name)
+		// Verify all resolved values are valid network names
+		for _, netName := range netNames {
+			if netName == "" {
+				continue
 			}
-			return fmt.Errorf("vm %q: rendered network value %q is not a valid network name (available: %v)",
-				resourceName, network, available)
+			if !networkNames[netName] {
+				var available []string
+				for name := range networkNames {
+					available = append(available, name)
+				}
+				return fmt.Errorf("vm %q: rendered network value %q is not a valid network name (available: %v)",
+					resourceName, netName, available)
+			}
 		}
 
 		return nil

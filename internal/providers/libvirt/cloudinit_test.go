@@ -502,6 +502,51 @@ func TestGenerateUserData_WriteFilesMultiline(t *testing.T) {
 	}
 }
 
+func TestGenerateUserData_RuncmdMultiline(t *testing.T) {
+	config := &CloudInitConfig{
+		VMName: "test-vm",
+		Users: []providerv1.UserSpec{
+			{
+				Name:              "ubuntu",
+				SSHAuthorizedKeys: []string{"ssh-ed25519 AAAA testkey"},
+			},
+		},
+		Runcmd: []string{
+			"echo single-line",
+			"cat > /etc/test.conf << 'EOF'\nline1\nline2\nEOF",
+			"systemctl restart test",
+		},
+	}
+
+	userData := generateUserData(config)
+
+	// Multiline command must use YAML literal block scalar
+	if !strings.Contains(userData, "  - |\n") {
+		t.Errorf("multiline runcmd should use literal block scalar, got:\n%s", userData)
+	}
+
+	// Single-line commands must NOT use block scalar
+	if !strings.Contains(userData, "  - echo single-line\n") {
+		t.Errorf("single-line runcmd should be inline, got:\n%s", userData)
+	}
+	if !strings.Contains(userData, "  - systemctl restart test\n") {
+		t.Errorf("single-line runcmd should be inline, got:\n%s", userData)
+	}
+
+	// Multiline content must be indented under the block scalar
+	if !strings.Contains(userData, "    cat > /etc/test.conf << 'EOF'\n") {
+		t.Errorf("multiline content lines should be indented with 4 spaces, got:\n%s", userData)
+	}
+	if !strings.Contains(userData, "    line1\n") {
+		t.Errorf("multiline content should contain indented line1, got:\n%s", userData)
+	}
+
+	// SSH key must still be present (cloud-init YAML is not corrupted)
+	if !strings.Contains(userData, "ssh-ed25519 AAAA testkey") {
+		t.Errorf("SSH key should still be present in user-data, got:\n%s", userData)
+	}
+}
+
 func TestGenerateUserData_WriteFilesNoPermissions(t *testing.T) {
 	config := &CloudInitConfig{
 		VMName: "test-vm",

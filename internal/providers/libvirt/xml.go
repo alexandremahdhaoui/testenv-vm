@@ -34,17 +34,24 @@ type NetworkConfig struct {
 	DHCPEnd     string
 }
 
+// NetworkInterface describes a single NIC to attach to a domain.
+type NetworkInterface struct {
+	// Name is the libvirt network name.
+	Name string
+	// HasNetworkBoot enables PXE ROM on this interface.
+	HasNetworkBoot bool
+}
+
 // DomainConfig holds configuration for generating domain XML.
 type DomainConfig struct {
-	Name           string
-	MemoryMB       int
-	VCPU           int
-	DiskPath       string
-	CloudInitISO   string
-	NetworkName    string
-	BootOrder      []string // Boot device order: "network", "hd", "cdrom"
-	Firmware       string   // "bios" or "uefi"
-	HasNetworkBoot bool     // True if BootOrder contains "network" (enables PXE ROM)
+	Name         string
+	MemoryMB     int
+	VCPU         int
+	DiskPath     string
+	CloudInitISO string
+	Networks     []NetworkInterface // One or more NICs to attach.
+	BootOrder    []string           // Boot device order: "network", "hd", "cdrom"
+	Firmware     string             // "bios" or "uefi"
 }
 
 // generateBridgeName generates a unique bridge name from the network name.
@@ -189,14 +196,16 @@ const domainTemplate = `<domain type='kvm'>
             <readonly/>
         </disk>
 {{end}}
-        <!-- Network interface -->
+        <!-- Network interfaces -->
+{{- range .Networks}}
         <interface type='network'>
-            <source network='{{.NetworkName}}'/>
+            <source network='{{.Name}}'/>
             <model type='virtio'/>
 {{- if .HasNetworkBoot}}
             <rom bar='on'/>
 {{- end}}
         </interface>
+{{- end}}
 
         <!-- Serial console -->
         <serial type='pty'>

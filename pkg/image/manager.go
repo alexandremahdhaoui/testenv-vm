@@ -119,7 +119,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 	}
 
 	// Compute cache key from source (and customize spec if present)
-	key := m.cacheKeyWithCustomize(source, &spec.Customize)
+	key := m.cacheKeyWithCustomize(source, spec.Customize)
 
 	// Acquire file-based lock for cross-process safety
 	lockFile, err := m.acquireFileLock(key)
@@ -154,7 +154,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 	}
 
 	// Customize flow: build a pre-customized qcow2 overlay from a base image.
-	if len(spec.Customize.Packages) > 0 || len(spec.Customize.Runcmd) > 0 {
+	if spec.Customize != nil && (len(spec.Customize.Packages) > 0 || len(spec.Customize.Runcmd) > 0) {
 		// Check virt-customize availability
 		if err := checkVirtCustomize(); err != nil {
 			return nil, err
@@ -202,7 +202,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		}
 
 		// Run virt-customize
-		if err := runVirtCustomize(ctx, localPath, &spec.Customize); err != nil {
+		if err := runVirtCustomize(ctx, localPath, spec.Customize); err != nil {
 			cleanupPartialImage(localPath)
 			m.mu.Lock()
 			m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}

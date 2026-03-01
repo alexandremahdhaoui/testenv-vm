@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -109,7 +110,13 @@ type Client struct {
 
 	requestID   atomic.Int64
 	initialized bool
-	mu          sync.Mutex
+	writeMu     sync.Mutex // Serializes request writes to stdin
+
+	pending   map[int]chan jsonrpcResponse // Response routing table
+	pendingMu sync.Mutex                  // Protects pending map
+
+	routerDone chan struct{} // Signals responseRouter exit
+	routerErr  error         // Error from responseRouter
 
 	timeout time.Duration
 }
@@ -136,31 +143,38 @@ func NewClient(cmd *exec.Cmd) (*Client, error) {
 	}
 
 	client := &Client{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  stdout,
-		scanner: bufio.NewScanner(stdout),
-		encoder: json.NewEncoder(stdin),
-		timeout: DefaultTimeout,
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     stdout,
+		scanner:    bufio.NewScanner(stdout),
+		encoder:    json.NewEncoder(stdin),
+		timeout:    DefaultTimeout,
+		pending:    make(map[int]chan jsonrpcResponse),
+		routerDone: make(chan struct{}),
 	}
 
-	// Perform MCP initialization handshake
+	// Perform MCP initialization handshake (before router starts, reads response directly)
 	if err := client.initialize(); err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("MCP initialization failed: %w", err)
 	}
+
+	// Start the response router goroutine after initialization
+	go client.responseRouter()
 
 	return client, nil
 }
 
 // SetTimeout sets the timeout for MCP operations.
 func (c *Client) SetTimeout(timeout time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
 	c.timeout = timeout
 }
 
 // initialize performs the MCP initialization handshake.
+// This runs before the responseRouter goroutine starts, so it reads
+// from the scanner directly (synchronous single-threaded path).
 func (c *Client) initialize() error {
 	// Send initialize request
 	params := mcpInitializeParams{
@@ -173,7 +187,7 @@ func (c *Client) initialize() error {
 	}
 
 	var result mcpInitializeResult
-	if err := c.call("initialize", params, &result); err != nil {
+	if err := c.callSync("initialize", params, &result); err != nil {
 		return fmt.Errorf("initialize request failed: %w", err)
 	}
 
@@ -182,29 +196,18 @@ func (c *Client) initialize() error {
 		return fmt.Errorf("initialized notification failed: %w", err)
 	}
 
-	c.mu.Lock()
 	c.initialized = true
-	c.mu.Unlock()
 	return nil
 }
 
-// call sends a JSON-RPC request and waits for a response.
-func (c *Client) call(method string, params any, result any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// callSync sends a JSON-RPC request and reads the response synchronously.
+// Used only during initialization before the responseRouter goroutine starts.
+func (c *Client) callSync(method string, params any, result any) error {
 	id := int(c.requestID.Add(1))
 
-	// Convert params to map[string]any
-	var paramsMap map[string]any
-	if params != nil {
-		data, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf("failed to marshal params: %w", err)
-		}
-		if err := json.Unmarshal(data, &paramsMap); err != nil {
-			return fmt.Errorf("failed to convert params to map: %w", err)
-		}
+	paramsMap, err := toParamsMap(params)
+	if err != nil {
+		return err
 	}
 
 	req := jsonrpcRequest{
@@ -214,14 +217,10 @@ func (c *Client) call(method string, params any, result any) error {
 		Params:  paramsMap,
 	}
 
-	// Send request
 	if err := c.encoder.Encode(req); err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Read response synchronously while holding the mutex.
-	// This avoids the race condition where a timeout could cause the mutex
-	// to be released while a goroutine is still reading from the scanner.
 	if !c.scanner.Scan() {
 		if err := c.scanner.Err(); err != nil {
 			return fmt.Errorf("failed to read response: %w", err)
@@ -229,7 +228,6 @@ func (c *Client) call(method string, params any, result any) error {
 		return fmt.Errorf("unexpected end of response stream")
 	}
 
-	// Make a copy of the bytes since scanner reuses the buffer
 	data := make([]byte, len(c.scanner.Bytes()))
 	copy(data, c.scanner.Bytes())
 
@@ -238,17 +236,14 @@ func (c *Client) call(method string, params any, result any) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// Verify response ID matches request ID
 	if resp.ID != id {
 		return fmt.Errorf("response ID mismatch: expected %d, got %d", id, resp.ID)
 	}
 
-	// Check for JSON-RPC error
 	if resp.Error != nil {
 		return fmt.Errorf("JSON-RPC error %d: %s", resp.Error.Code, resp.Error.Message)
 	}
 
-	// Unmarshal result if provided
 	if result != nil && resp.Result != nil {
 		if err := json.Unmarshal(resp.Result, result); err != nil {
 			return fmt.Errorf("failed to unmarshal result: %w", err)
@@ -258,18 +253,126 @@ func (c *Client) call(method string, params any, result any) error {
 	return nil
 }
 
+// call sends a JSON-RPC request and waits for the response via the responseRouter.
+// Multiple goroutines can call this concurrently; writes are serialized by writeMu
+// and responses are routed back by ID.
+func (c *Client) call(ctx context.Context, method string, params any, result any) error {
+	id := int(c.requestID.Add(1))
+
+	paramsMap, err := toParamsMap(params)
+	if err != nil {
+		return err
+	}
+
+	req := jsonrpcRequest{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  method,
+		Params:  paramsMap,
+	}
+
+	// Register a response channel in the pending map.
+	responseCh := make(chan jsonrpcResponse, 1)
+	c.pendingMu.Lock()
+	c.pending[id] = responseCh
+	c.pendingMu.Unlock()
+
+	// Deregister from pending map on any exit path.
+	defer func() {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+	}()
+
+	// Acquire writeMu only for the encode operation.
+	c.writeMu.Lock()
+	encodeErr := c.encoder.Encode(req)
+	c.writeMu.Unlock()
+	if encodeErr != nil {
+		return fmt.Errorf("failed to send request: %w", encodeErr)
+	}
+
+	// Wait for response, router exit, or context cancellation.
+	select {
+	case resp := <-responseCh:
+		if resp.Error != nil {
+			return fmt.Errorf("JSON-RPC error %d: %s", resp.Error.Code, resp.Error.Message)
+		}
+		if result != nil && resp.Result != nil {
+			if err := json.Unmarshal(resp.Result, result); err != nil {
+				return fmt.Errorf("failed to unmarshal result: %w", err)
+			}
+		}
+		return nil
+	case <-c.routerDone:
+		if c.routerErr != nil {
+			return c.routerErr
+		}
+		return fmt.Errorf("response router exited unexpectedly")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// toParamsMap converts any params value to map[string]any for JSON-RPC.
+func toParamsMap(params any) (map[string]any, error) {
+	if params == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal params: %w", err)
+	}
+	var paramsMap map[string]any
+	if err := json.Unmarshal(data, &paramsMap); err != nil {
+		return nil, fmt.Errorf("failed to convert params to map: %w", err)
+	}
+	return paramsMap, nil
+}
+
+// responseRouter reads responses from the provider process and routes them
+// to the appropriate pending caller by request ID.
+func (c *Client) responseRouter() {
+	defer close(c.routerDone)
+
+	for c.scanner.Scan() {
+		data := make([]byte, len(c.scanner.Bytes()))
+		copy(data, c.scanner.Bytes())
+
+		var resp jsonrpcResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			log.Printf("warning: failed to parse response from provider: %v", err)
+			continue
+		}
+
+		c.pendingMu.Lock()
+		ch, ok := c.pending[resp.ID]
+		if ok {
+			delete(c.pending, resp.ID)
+		}
+		c.pendingMu.Unlock()
+
+		if !ok {
+			log.Printf("warning: received response for unknown ID %d", resp.ID)
+			continue
+		}
+
+		ch <- resp
+	}
+
+	// Scanner stopped: set error and exit (routerDone is closed by defer).
+	if err := c.scanner.Err(); err != nil {
+		c.routerErr = fmt.Errorf("response router: scanner error: %w", err)
+	} else {
+		c.routerErr = fmt.Errorf("response router: provider process exited")
+	}
+}
+
 // notify sends a JSON-RPC notification (no response expected).
 func (c *Client) notify(method string, params any) error {
-	// Notifications have no ID
-	var paramsMap map[string]any
-	if params != nil {
-		data, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf("failed to marshal params: %w", err)
-		}
-		if err := json.Unmarshal(data, &paramsMap); err != nil {
-			return fmt.Errorf("failed to convert params to map: %w", err)
-		}
+	paramsMap, err := toParamsMap(params)
+	if err != nil {
+		return err
 	}
 
 	req := struct {
@@ -282,8 +385,11 @@ func (c *Client) notify(method string, params any) error {
 		Params:  paramsMap,
 	}
 
-	if err := c.encoder.Encode(req); err != nil {
-		return fmt.Errorf("failed to send notification: %w", err)
+	c.writeMu.Lock()
+	encodeErr := c.encoder.Encode(req)
+	c.writeMu.Unlock()
+	if encodeErr != nil {
+		return fmt.Errorf("failed to send notification: %w", encodeErr)
 	}
 
 	return nil
@@ -291,6 +397,11 @@ func (c *Client) notify(method string, params any) error {
 
 // Call invokes an MCP tool and returns the operation result.
 func (c *Client) Call(tool string, input any) (*providerv1.OperationResult, error) {
+	return c.CallWithContext(context.Background(), tool, input)
+}
+
+// CallWithContext invokes an MCP tool with a context for cancellation/timeout.
+func (c *Client) CallWithContext(ctx context.Context, tool string, input any) (*providerv1.OperationResult, error) {
 	if !c.initialized {
 		return nil, fmt.Errorf("client not initialized")
 	}
@@ -313,7 +424,7 @@ func (c *Client) Call(tool string, input any) (*providerv1.OperationResult, erro
 	}
 
 	var result mcpToolCallResult
-	if err := c.call("tools/call", params, &result); err != nil {
+	if err := c.call(ctx, "tools/call", params, &result); err != nil {
 		return nil, err
 	}
 
@@ -339,28 +450,6 @@ func (c *Client) Call(tool string, input any) (*providerv1.OperationResult, erro
 	}
 
 	return &opResult, nil
-}
-
-// CallWithContext invokes an MCP tool with a context for cancellation/timeout.
-func (c *Client) CallWithContext(ctx context.Context, tool string, input any) (*providerv1.OperationResult, error) {
-	// Create a channel for the result
-	type callResult struct {
-		result *providerv1.OperationResult
-		err    error
-	}
-	resultCh := make(chan callResult, 1)
-
-	go func() {
-		result, err := c.Call(tool, input)
-		resultCh <- callResult{result: result, err: err}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-resultCh:
-		return r.result, r.err
-	}
 }
 
 // Capabilities retrieves the provider's capabilities.
@@ -390,15 +479,32 @@ func (c *Client) Capabilities() (*providerv1.CapabilitiesResponse, error) {
 
 // Close terminates the provider process and cleans up resources.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	var errs []error
 
-	// Close stdin to signal the process to exit
+	// Close stdin to signal the process to exit.
+	// This causes the provider to EOF, which in turn causes the scanner
+	// in responseRouter to return false, closing routerDone.
 	if c.stdin != nil {
 		if err := c.stdin.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close stdin: %w", err))
+		}
+	}
+
+	// Wait for the responseRouter to exit (with timeout).
+	// The router is only started after successful initialization.
+	if c.routerDone != nil && c.initialized {
+		select {
+		case <-c.routerDone:
+			// Router exited cleanly
+		case <-time.After(5 * time.Second):
+			// Router did not exit in time; force-kill the process below
+			if c.cmd != nil && c.cmd.Process != nil {
+				if err := c.cmd.Process.Kill(); err != nil {
+					errs = append(errs, fmt.Errorf("failed to kill process: %w", err))
+				}
+			}
+			// Wait again for routerDone after kill
+			<-c.routerDone
 		}
 	}
 
@@ -409,7 +515,7 @@ func (c *Client) Close() error {
 		}
 	}
 
-	// Wait for the process to exit (with timeout)
+	// Wait for the process to exit
 	if c.cmd != nil && c.cmd.Process != nil {
 		done := make(chan error, 1)
 		go func() {

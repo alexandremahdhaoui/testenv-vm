@@ -329,9 +329,16 @@ func (e *Executor) createResource(
 			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
 		convertedVMSpec := e.convertVMSpec(renderedSpec.Spec)
-		// Prefix the network reference and rewrite cloud-init IPs for isolation
+		// Prefix network references for isolation
 		if isoConfig != nil && isoConfig.NamePrefix != "" {
-			convertedVMSpec.Network = prefixedName(isoConfig, convertedVMSpec.Network)
+			if len(convertedVMSpec.Networks) > 0 {
+				for i, n := range convertedVMSpec.Networks {
+					convertedVMSpec.Networks[i] = prefixedName(isoConfig, n)
+				}
+			}
+			if convertedVMSpec.Network != "" {
+				convertedVMSpec.Network = prefixedName(isoConfig, convertedVMSpec.Network)
+			}
 		}
 		if isoConfig != nil && isoConfig.OriginalCIDRPrefix != isoConfig.NewCIDRPrefix {
 			if convertedVMSpec.CloudInit != nil {
@@ -673,10 +680,20 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		bootOrder = []string{}
 	}
 
+	// Resolve networks: Networks takes precedence over Network.
+	var networks []string
+	network := spec.Network
+	if len(spec.Networks) > 0 {
+		networks = spec.Networks
+	} else if spec.Network != "" {
+		networks = []string{spec.Network}
+	}
+
 	result := providerv1.VMSpec{
-		Memory:  spec.Memory,
-		VCPUs:   spec.Vcpus,
-		Network: spec.Network,
+		Memory:   spec.Memory,
+		VCPUs:    spec.Vcpus,
+		Network:  network,
+		Networks: networks,
 		Disk: providerv1.DiskSpec{
 			BaseImage: spec.Disk.BaseImage,
 			Size:      spec.Disk.Size,

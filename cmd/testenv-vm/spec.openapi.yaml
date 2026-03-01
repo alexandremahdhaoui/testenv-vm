@@ -301,7 +301,12 @@ components:
           $ref: '#/components/schemas/DiskSpec'
         network:
           type: string
-          description: Name of the network resource to attach.
+          description: Name of the network resource to attach. Deprecated in favor of networks.
+        networks:
+          type: array
+          items:
+            type: string
+          description: List of network resource names to attach. Takes precedence over network.
         cloudInit:
           $ref: '#/components/schemas/CloudInitSpec'
         boot:
@@ -312,7 +317,6 @@ components:
         - memory
         - vcpus
         - disk
-        - network
         - boot
 
     DiskSpec:

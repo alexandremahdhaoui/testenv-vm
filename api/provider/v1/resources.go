@@ -45,7 +45,11 @@ type VMSpec struct {
 	// Disk configuration.
 	Disk DiskSpec `json:"disk"`
 	// Network to attach (reference to network resource name).
-	Network string `json:"network"`
+	// Deprecated: use Networks instead.
+	Network string `json:"network,omitempty"`
+	// Networks to attach (list of network resource names).
+	// Takes precedence over Network when set.
+	Networks []string `json:"networks,omitempty"`
 	// CloudInit configuration.
 	CloudInit *CloudInitSpec `json:"cloudInit,omitempty"`
 	// Boot configuration.
@@ -256,10 +260,14 @@ type VMState struct {
 	Name string `json:"name"`
 	// Status: creating, running, stopped, failed, destroyed.
 	Status string `json:"status"`
-	// IP is the assigned IP address (if available).
+	// IP is the assigned IP address of the first NIC (if available).
 	IP string `json:"ip,omitempty"`
-	// MAC is the MAC address.
+	// MAC is the MAC address of the first NIC.
 	MAC string `json:"mac,omitempty"`
+	// IPs maps network name to assigned IP address (for multi-NIC VMs).
+	IPs map[string]string `json:"ips,omitempty"`
+	// MACs maps network name to MAC address (for multi-NIC VMs).
+	MACs map[string]string `json:"macs,omitempty"`
 	// UUID is the provider-specific unique ID.
 	UUID string `json:"uuid,omitempty"`
 	// ConsoleOutput path to console log file.

@@ -98,19 +98,24 @@ func extractStaticIP(ci *providerv1.CloudInitSpec) string {
 	return ""
 }
 
-// extractMACFromDomainXML extracts the MAC address from a domain's XML.
-// This is a simple extraction that looks for the first MAC address in a virtio interface.
-func extractMACFromDomainXML(xml string) string {
-	// Simple extraction - look for mac address="XX:XX:XX:XX:XX:XX" pattern
-	// This is a basic implementation; a more robust one would use XML parsing
-	macStart := strings.Index(xml, "<mac address='")
-	if macStart == -1 {
-		return ""
+// extractAllMACsFromDomainXML extracts all MAC addresses from a domain's XML.
+// Returns MACs in interface order, which matches the NIC attachment order.
+func extractAllMACsFromDomainXML(xml string) []string {
+	var macs []string
+	remaining := xml
+	for {
+		macStart := strings.Index(remaining, "<mac address='")
+		if macStart == -1 {
+			break
+		}
+		macStart += len("<mac address='")
+		remaining = remaining[macStart:]
+		macEnd := strings.Index(remaining, "'")
+		if macEnd == -1 {
+			break
+		}
+		macs = append(macs, remaining[:macEnd])
+		remaining = remaining[macEnd:]
 	}
-	macStart += len("<mac address='")
-	macEnd := strings.Index(xml[macStart:], "'")
-	if macEnd == -1 {
-		return ""
-	}
-	return xml[macStart : macStart+macEnd]
+	return macs
 }

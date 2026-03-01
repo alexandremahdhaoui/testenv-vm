@@ -285,7 +285,7 @@ func TestGenerateDomainXML(t *testing.T) {
 		VCPU:         2,
 		DiskPath:     "/var/lib/libvirt/images/test.qcow2",
 		CloudInitISO: "/var/lib/libvirt/images/test-ci.iso",
-		NetworkName:  "default",
+		Networks:     []NetworkInterface{{Name: "default"}},
 	}
 
 	xml, err := generateDomainXML(config)
@@ -322,7 +322,7 @@ func TestGenerateDomainXML_SmallVM(t *testing.T) {
 		VCPU:         1,
 		DiskPath:     "/tmp/small.qcow2",
 		CloudInitISO: "/tmp/small-ci.iso",
-		NetworkName:  "isolated",
+		Networks:     []NetworkInterface{{Name: "isolated"}},
 	}
 
 	xml, err := generateDomainXML(config)
@@ -350,7 +350,7 @@ func TestGenerateDomainXML_Defaults(t *testing.T) {
 		VCPU:         0, // Should default to 2
 		DiskPath:     "/tmp/default.qcow2",
 		CloudInitISO: "/tmp/default-ci.iso",
-		NetworkName:  "default",
+		Networks:     []NetworkInterface{{Name: "default"}},
 	}
 
 	xml, err := generateDomainXML(config)
@@ -374,7 +374,7 @@ func TestGenerateDomainXML_CustomValues(t *testing.T) {
 		VCPU:         4,
 		DiskPath:     "/var/lib/libvirt/images/custom.qcow2",
 		CloudInitISO: "/var/lib/libvirt/images/custom-ci.iso",
-		NetworkName:  "custom-net",
+		Networks:     []NetworkInterface{{Name: "custom-net"}},
 	}
 
 	xml, err := generateDomainXML(config)
@@ -614,5 +614,177 @@ func TestExtractMACFromDomainXML(t *testing.T) {
 				t.Errorf("extractMACFromDomainXML: got %q, want %q", mac, tt.wantMAC)
 			}
 		})
+	}
+}
+
+func TestExtractAllMACsFromDomainXML(t *testing.T) {
+	tests := []struct {
+		name     string
+		xml      string
+		wantMACs []string
+	}{
+		{
+			name:     "No interfaces",
+			xml:      "<domain><devices></devices></domain>",
+			wantMACs: nil,
+		},
+		{
+			name: "Single interface",
+			xml: `<domain><devices>
+				<interface type='network'>
+					<mac address='52:54:00:aa:bb:cc'/>
+				</interface>
+			</devices></domain>`,
+			wantMACs: []string{"52:54:00:aa:bb:cc"},
+		},
+		{
+			name: "Two interfaces",
+			xml: `<domain><devices>
+				<interface type='network'>
+					<mac address='52:54:00:aa:bb:cc'/>
+				</interface>
+				<interface type='network'>
+					<mac address='52:54:00:dd:ee:ff'/>
+				</interface>
+			</devices></domain>`,
+			wantMACs: []string{"52:54:00:aa:bb:cc", "52:54:00:dd:ee:ff"},
+		},
+		{
+			name: "Three interfaces",
+			xml: `<domain><devices>
+				<interface type='network'>
+					<mac address='52:54:00:11:22:33'/>
+				</interface>
+				<interface type='network'>
+					<mac address='52:54:00:44:55:66'/>
+				</interface>
+				<interface type='network'>
+					<mac address='52:54:00:77:88:99'/>
+				</interface>
+			</devices></domain>`,
+			wantMACs: []string{"52:54:00:11:22:33", "52:54:00:44:55:66", "52:54:00:77:88:99"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			macs := extractAllMACsFromDomainXML(tt.xml)
+			if len(macs) != len(tt.wantMACs) {
+				t.Fatalf("extractAllMACsFromDomainXML: got %d MACs, want %d", len(macs), len(tt.wantMACs))
+			}
+			for i, mac := range macs {
+				if mac != tt.wantMACs[i] {
+					t.Errorf("extractAllMACsFromDomainXML[%d]: got %q, want %q", i, mac, tt.wantMACs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateDomainXML_MultipleNICs(t *testing.T) {
+	tests := []struct {
+		name           string
+		networks       []NetworkInterface
+		wantCount      int
+		wantNetworks   []string
+		wantPXECount   int // number of NICs with rom bar='on'
+	}{
+		{
+			name:         "Single NIC",
+			networks:     []NetworkInterface{{Name: "mgmt"}},
+			wantCount:    1,
+			wantNetworks: []string{"mgmt"},
+			wantPXECount: 0,
+		},
+		{
+			name: "Two NICs",
+			networks: []NetworkInterface{
+				{Name: "mgmt"},
+				{Name: "data"},
+			},
+			wantCount:    2,
+			wantNetworks: []string{"mgmt", "data"},
+			wantPXECount: 0,
+		},
+		{
+			name: "Three NICs",
+			networks: []NetworkInterface{
+				{Name: "mgmt"},
+				{Name: "frontend"},
+				{Name: "backend"},
+			},
+			wantCount:    3,
+			wantNetworks: []string{"mgmt", "frontend", "backend"},
+			wantPXECount: 0,
+		},
+		{
+			name: "Two NICs with PXE on first",
+			networks: []NetworkInterface{
+				{Name: "pxe-net", HasNetworkBoot: true},
+				{Name: "data"},
+			},
+			wantCount:    2,
+			wantNetworks: []string{"pxe-net", "data"},
+			wantPXECount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := DomainConfig{
+				Name:         "multi-nic-vm",
+				MemoryMB:     1024,
+				VCPU:         2,
+				DiskPath:     "/tmp/test.qcow2",
+				CloudInitISO: "/tmp/test-ci.iso",
+				Networks:     tt.networks,
+			}
+
+			xml, err := generateDomainXML(config)
+			if err != nil {
+				t.Fatalf("generateDomainXML failed: %v", err)
+			}
+
+			// Count interface blocks
+			interfaceCount := strings.Count(xml, "<interface type='network'>")
+			if interfaceCount != tt.wantCount {
+				t.Errorf("Expected %d interface blocks, got %d\nXML:\n%s", tt.wantCount, interfaceCount, xml)
+			}
+
+			// Verify each network name appears
+			for _, netName := range tt.wantNetworks {
+				expected := "<source network='" + netName + "'/>"
+				if !strings.Contains(xml, expected) {
+					t.Errorf("XML should contain %s\nXML:\n%s", expected, xml)
+				}
+			}
+
+			// Count PXE ROM entries
+			pxeCount := strings.Count(xml, "<rom bar='on'/>")
+			if pxeCount != tt.wantPXECount {
+				t.Errorf("Expected %d PXE ROM entries, got %d\nXML:\n%s", tt.wantPXECount, pxeCount, xml)
+			}
+		})
+	}
+}
+
+func TestGenerateDomainXML_NoNetworks(t *testing.T) {
+	config := DomainConfig{
+		Name:         "no-net-vm",
+		MemoryMB:     1024,
+		VCPU:         1,
+		DiskPath:     "/tmp/test.qcow2",
+		CloudInitISO: "/tmp/test-ci.iso",
+		Networks:     nil,
+	}
+
+	xml, err := generateDomainXML(config)
+	if err != nil {
+		t.Fatalf("generateDomainXML failed: %v", err)
+	}
+
+	// Should produce no interface blocks
+	if strings.Contains(xml, "<interface") {
+		t.Errorf("Domain XML with no networks should not contain interface blocks\nXML:\n%s", xml)
 	}
 }

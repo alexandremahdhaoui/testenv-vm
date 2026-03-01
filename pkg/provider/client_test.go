@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -98,26 +99,65 @@ func (mp *mockProcess) Close() error {
 	return nil
 }
 
-// TestCallWithValidResponse tests that call() properly handles valid responses.
-func TestCallWithValidResponse(t *testing.T) {
-	// Create a response for the call
+// newTestClient creates a Client with a mock process for synchronous (callSync) tests.
+// The responseRouter is NOT started; use this for callSync tests only.
+func newTestClient(mp *mockProcess) *Client {
+	return &Client{
+		stdin:      mp.stdin,
+		stdout:     mp.stdout,
+		scanner:    bufio.NewScanner(mp.stdout),
+		encoder:    json.NewEncoder(mp.stdin),
+		timeout:    5 * time.Second,
+		pending:    make(map[int]chan jsonrpcResponse),
+		routerDone: make(chan struct{}),
+	}
+}
+
+// newTestClientWithRouter creates a Client with pipes and starts the responseRouter.
+// Returns the client, a stdinReader (to read what client sends), a stdoutWriter
+// (to send responses to the client), and a cleanup function.
+func newTestClientWithRouter(t *testing.T) (*Client, io.ReadCloser, io.WriteCloser, func()) {
+	t.Helper()
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+
+	client := &Client{
+		stdin:       stdinWriter,
+		stdout:      stdoutReader,
+		scanner:     bufio.NewScanner(stdoutReader),
+		encoder:     json.NewEncoder(stdinWriter),
+		timeout:     5 * time.Second,
+		initialized: true,
+		pending:     make(map[int]chan jsonrpcResponse),
+		routerDone:  make(chan struct{}),
+	}
+
+	go client.responseRouter()
+
+	cleanup := func() {
+		stdinWriter.Close()
+		stdoutWriter.Close()
+		stdinReader.Close()
+		// Wait for router to exit
+		<-client.routerDone
+	}
+
+	return client, stdinReader, stdoutWriter, cleanup
+}
+
+// TestCallSyncWithValidResponse tests that callSync() properly handles valid responses.
+func TestCallSyncWithValidResponse(t *testing.T) {
 	response := `{"jsonrpc":"2.0","id":1,"result":{"key":"value"}}`
 
 	mp := newMockProcess([]string{response})
 	defer mp.Close()
 
-	client := &Client{
-		stdin:   mp.stdin,
-		stdout:  mp.stdout,
-		scanner: bufio.NewScanner(mp.stdout),
-		encoder: json.NewEncoder(mp.stdin),
-		timeout: 5 * time.Second,
-	}
+	client := newTestClient(mp)
 
 	var result map[string]string
-	err := client.call("test_method", nil, &result)
+	err := client.callSync("test_method", nil, &result)
 	if err != nil {
-		t.Fatalf("call() returned error: %v", err)
+		t.Fatalf("callSync() returned error: %v", err)
 	}
 
 	if result["key"] != "value" {
@@ -125,24 +165,18 @@ func TestCallWithValidResponse(t *testing.T) {
 	}
 }
 
-// TestCallWithErrorResponse tests that call() properly handles error responses.
-func TestCallWithErrorResponse(t *testing.T) {
+// TestCallSyncWithErrorResponse tests that callSync() properly handles error responses.
+func TestCallSyncWithErrorResponse(t *testing.T) {
 	response := `{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid Request"}}`
 
 	mp := newMockProcess([]string{response})
 	defer mp.Close()
 
-	client := &Client{
-		stdin:   mp.stdin,
-		stdout:  mp.stdout,
-		scanner: bufio.NewScanner(mp.stdout),
-		encoder: json.NewEncoder(mp.stdin),
-		timeout: 5 * time.Second,
-	}
+	client := newTestClient(mp)
 
-	err := client.call("test_method", nil, nil)
+	err := client.callSync("test_method", nil, nil)
 	if err == nil {
-		t.Fatal("expected error from call()")
+		t.Fatal("expected error from callSync()")
 	}
 
 	if !strings.Contains(err.Error(), "Invalid Request") {
@@ -150,23 +184,17 @@ func TestCallWithErrorResponse(t *testing.T) {
 	}
 }
 
-// TestCallWithIDMismatch tests that call() detects response ID mismatches.
-func TestCallWithIDMismatch(t *testing.T) {
+// TestCallSyncWithIDMismatch tests that callSync() detects response ID mismatches.
+func TestCallSyncWithIDMismatch(t *testing.T) {
 	// Response with wrong ID (2 instead of 1)
 	response := `{"jsonrpc":"2.0","id":2,"result":{}}`
 
 	mp := newMockProcess([]string{response})
 	defer mp.Close()
 
-	client := &Client{
-		stdin:   mp.stdin,
-		stdout:  mp.stdout,
-		scanner: bufio.NewScanner(mp.stdout),
-		encoder: json.NewEncoder(mp.stdin),
-		timeout: 5 * time.Second,
-	}
+	client := newTestClient(mp)
 
-	err := client.call("test_method", nil, nil)
+	err := client.callSync("test_method", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for ID mismatch")
 	}
@@ -176,26 +204,87 @@ func TestCallWithIDMismatch(t *testing.T) {
 	}
 }
 
-// TestCallWithContextTimeout tests that CallWithContext respects context deadlines.
-func TestCallWithContextTimeout(t *testing.T) {
-	// Create a mock process that never responds
-	stdinReader, stdinWriter := io.Pipe()
-	stdoutReader, stdoutWriter := io.Pipe()
-	defer stdinReader.Close()
-	defer stdinWriter.Close()
-	defer stdoutReader.Close()
-	defer stdoutWriter.Close()
+// TestCallSyncWithMalformedResponse tests handling of invalid JSON responses in callSync.
+func TestCallSyncWithMalformedResponse(t *testing.T) {
+	response := `not valid json`
 
-	client := &Client{
-		stdin:       stdinWriter,
-		stdout:      stdoutReader,
-		scanner:     bufio.NewScanner(stdoutReader),
-		encoder:     json.NewEncoder(stdinWriter),
-		timeout:     DefaultTimeout,
-		initialized: true, // Mark as initialized so Call() works
+	mp := newMockProcess([]string{response})
+	defer mp.Close()
+
+	client := newTestClient(mp)
+
+	err := client.callSync("test_method", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
 	}
 
-	// Drain stdin to prevent blocking
+	if !strings.Contains(err.Error(), "failed to parse response") {
+		t.Errorf("expected parse error, got: %v", err)
+	}
+}
+
+// TestCallWithValidResponse tests that call() with responseRouter handles valid responses.
+func TestCallWithValidResponse(t *testing.T) {
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
+	// Echo-style responder: reads requests, responds with matching IDs
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var req jsonrpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"key":"value"}}`, req.ID)
+			stdoutWriter.Write([]byte(resp + "\n"))
+		}
+	}()
+
+	var result map[string]string
+	err := client.call(context.Background(), "test_method", nil, &result)
+	if err != nil {
+		t.Fatalf("call() returned error: %v", err)
+	}
+
+	if result["key"] != "value" {
+		t.Errorf("expected result[key] = value, got %v", result["key"])
+	}
+}
+
+// TestCallWithErrorResponse tests that call() with responseRouter handles error responses.
+func TestCallWithErrorResponse(t *testing.T) {
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var req jsonrpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32600,"message":"Invalid Request"}}`, req.ID)
+			stdoutWriter.Write([]byte(resp + "\n"))
+		}
+	}()
+
+	err := client.call(context.Background(), "test_method", nil, nil)
+	if err == nil {
+		t.Fatal("expected error from call()")
+	}
+
+	if !strings.Contains(err.Error(), "Invalid Request") {
+		t.Errorf("expected error to contain 'Invalid Request', got: %v", err)
+	}
+}
+
+// TestCallWithContextTimeout tests that CallWithContext respects context deadlines.
+func TestCallWithContextTimeout(t *testing.T) {
+	client, stdinReader, _, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
+	// Drain stdin to prevent write blocking, but never respond
 	go func() {
 		buf := make([]byte, 1024)
 		for {
@@ -206,7 +295,6 @@ func TestCallWithContextTimeout(t *testing.T) {
 		}
 	}()
 
-	// Create a context with a short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -222,33 +310,18 @@ func TestCallWithContextTimeout(t *testing.T) {
 		t.Errorf("expected context.DeadlineExceeded, got: %v", err)
 	}
 
-	// Verify timeout occurred approximately at the right time
 	if elapsed < 100*time.Millisecond || elapsed > 500*time.Millisecond {
 		t.Errorf("timeout occurred at unexpected time: %v", elapsed)
 	}
 }
 
-// TestCallConcurrentAccess tests that call() is safe for concurrent access.
+// TestCallConcurrentAccess tests that call() is safe for concurrent access
+// and all 10 concurrent calls complete with correct responses.
 func TestCallConcurrentAccess(t *testing.T) {
-	// Create responses for multiple concurrent calls
-	responses := make([]string, 10)
-	for i := range responses {
-		responses[i] = `{"jsonrpc":"2.0","id":` + string(rune('1'+i)) + `,"result":{}}`
-	}
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
 
-	// Use a channel-based approach for concurrent testing
-	stdinReader, stdinWriter := io.Pipe()
-	stdoutReader, stdoutWriter := io.Pipe()
-
-	client := &Client{
-		stdin:   stdinWriter,
-		stdout:  stdoutReader,
-		scanner: bufio.NewScanner(stdoutReader),
-		encoder: json.NewEncoder(stdinWriter),
-		timeout: 5 * time.Second,
-	}
-
-	// Start a goroutine to respond to requests
+	// Echo responder: responds with matching ID
 	go func() {
 		scanner := bufio.NewScanner(stdinReader)
 		for scanner.Scan() {
@@ -268,27 +341,23 @@ func TestCallConcurrentAccess(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	errors := make(chan error, 10)
+	errs := make(chan error, 10)
 
-	// Launch 10 concurrent calls - but they will be serialized by the mutex
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := client.call("test_method", nil, nil)
+			err := client.call(context.Background(), "test_method", nil, nil)
 			if err != nil {
-				errors <- err
+				errs <- err
 			}
 		}()
 	}
 
 	wg.Wait()
-	close(errors)
+	close(errs)
 
-	stdinWriter.Close()
-	stdoutWriter.Close()
-
-	for err := range errors {
+	for err := range errs {
 		t.Errorf("concurrent call failed: %v", err)
 	}
 }
@@ -302,8 +371,8 @@ func TestSetTimeout(t *testing.T) {
 	newTimeout := 10 * time.Second
 	client.SetTimeout(newTimeout)
 
-	client.mu.Lock()
-	defer client.mu.Unlock()
+	client.pendingMu.Lock()
+	defer client.pendingMu.Unlock()
 
 	if client.timeout != newTimeout {
 		t.Errorf("expected timeout %v, got %v", newTimeout, client.timeout)
@@ -312,7 +381,9 @@ func TestSetTimeout(t *testing.T) {
 
 // TestCallPublicMethod tests the public Call method that wraps internal call.
 func TestCallPublicMethod(t *testing.T) {
-	// Create a response that looks like an OperationResult
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
 	opResult := providerv1.OperationResult{
 		Success: true,
 		Resource: map[string]any{
@@ -328,20 +399,17 @@ func TestCallPublicMethod(t *testing.T) {
 	}
 	mcpResultJSON, _ := json.Marshal(mcpResult)
 
-	// For tools/call - ID will be 1 since requestID starts at 0 and adds 1
-	callResponse := `{"jsonrpc":"2.0","id":1,"result":` + string(mcpResultJSON) + `}`
-
-	mp := newMockProcess([]string{callResponse})
-	defer mp.Close()
-
-	client := &Client{
-		stdin:       mp.stdin,
-		stdout:      mp.stdout,
-		scanner:     bufio.NewScanner(mp.stdout),
-		encoder:     json.NewEncoder(mp.stdin),
-		timeout:     5 * time.Second,
-		initialized: true, // Skip initialization for this test
-	}
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var req jsonrpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, string(mcpResultJSON))
+			stdoutWriter.Write([]byte(resp + "\n"))
+		}
+	}()
 
 	result, err := client.Call("test_tool", map[string]string{"key": "value"})
 	if err != nil {
@@ -371,39 +439,25 @@ func TestCallNotInitialized(t *testing.T) {
 
 // TestInitializeRaceCondition tests that initialize() sets initialized safely.
 func TestInitializeRaceCondition(t *testing.T) {
-	// Initialize response
 	initResponse := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"test","version":"1.0.0"}}}`
 
 	mp := newMockProcess([]string{initResponse})
 	defer mp.Close()
 
-	client := &Client{
-		stdin:   mp.stdin,
-		stdout:  mp.stdout,
-		scanner: bufio.NewScanner(mp.stdout),
-		encoder: json.NewEncoder(mp.stdin),
-		timeout: 5 * time.Second,
-	}
+	client := newTestClient(mp)
 
-	// Run initialize and check that initialized is set correctly
 	err := client.initialize()
 	if err != nil {
 		t.Fatalf("initialize() returned error: %v", err)
 	}
 
-	// Access initialized with proper synchronization
-	client.mu.Lock()
-	initialized := client.initialized
-	client.mu.Unlock()
-
-	if !initialized {
+	if !client.initialized {
 		t.Error("expected initialized=true after initialize()")
 	}
 }
 
 // TestIsRunning tests the IsRunning method.
 func TestIsRunning(t *testing.T) {
-	// Test with nil cmd
 	client := &Client{
 		cmd: nil,
 	}
@@ -411,7 +465,6 @@ func TestIsRunning(t *testing.T) {
 		t.Error("expected IsRunning()=false for nil cmd")
 	}
 
-	// Test with a real but not started command
 	cmd := exec.Command("echo", "test")
 	client = &Client{
 		cmd: cmd,
@@ -421,54 +474,26 @@ func TestIsRunning(t *testing.T) {
 	}
 }
 
-// TestCallWithMalformedResponse tests handling of invalid JSON responses.
-func TestCallWithMalformedResponse(t *testing.T) {
-	response := `not valid json`
-
-	mp := newMockProcess([]string{response})
-	defer mp.Close()
-
-	client := &Client{
-		stdin:   mp.stdin,
-		stdout:  mp.stdout,
-		scanner: bufio.NewScanner(mp.stdout),
-		encoder: json.NewEncoder(mp.stdin),
-		timeout: 5 * time.Second,
-	}
-
-	err := client.call("test_method", nil, nil)
-	if err == nil {
-		t.Fatal("expected error for malformed JSON")
-	}
-
-	if !strings.Contains(err.Error(), "failed to parse response") {
-		t.Errorf("expected parse error, got: %v", err)
-	}
-}
-
 // TestCallWithParams tests that parameters are correctly serialized.
 func TestCallWithParams(t *testing.T) {
-	response := `{"jsonrpc":"2.0","id":1,"result":{}}`
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
 
-	stdinReader, stdinWriter := io.Pipe()
-	stdoutReader, stdoutWriter := io.Pipe()
-
-	client := &Client{
-		stdin:   stdinWriter,
-		stdout:  stdoutReader,
-		scanner: bufio.NewScanner(stdoutReader),
-		encoder: json.NewEncoder(stdinWriter),
-		timeout: 5 * time.Second,
-	}
-
-	// Capture the request
 	var capturedRequest jsonrpcRequest
+	var captured sync.WaitGroup
+	captured.Add(1)
 	go func() {
 		scanner := bufio.NewScanner(stdinReader)
 		if scanner.Scan() {
 			json.Unmarshal(scanner.Bytes(), &capturedRequest)
+			captured.Done()
+			// Respond with matching ID
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`, capturedRequest.ID)
+			stdoutWriter.Write([]byte(resp + "\n"))
 		}
-		stdoutWriter.Write([]byte(response + "\n"))
+		// Drain remaining
+		for scanner.Scan() {
+		}
 	}()
 
 	params := struct {
@@ -479,24 +504,26 @@ func TestCallWithParams(t *testing.T) {
 		Value: 42,
 	}
 
-	err := client.call("test_method", params, nil)
+	err := client.call(context.Background(), "test_method", params, nil)
 	if err != nil {
 		t.Fatalf("call() returned error: %v", err)
 	}
 
-	stdinWriter.Close()
-	stdoutWriter.Close()
+	captured.Wait()
 
 	if capturedRequest.Params["name"] != "test" {
 		t.Errorf("expected params.name=test, got %v", capturedRequest.Params["name"])
 	}
-	if capturedRequest.Params["value"] != float64(42) { // JSON numbers are float64
+	if capturedRequest.Params["value"] != float64(42) {
 		t.Errorf("expected params.value=42, got %v", capturedRequest.Params["value"])
 	}
 }
 
 // TestCallWithToolCallError tests handling of tool call errors.
 func TestCallWithToolCallError(t *testing.T) {
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
 	mcpResult := mcpToolCallResult{
 		IsError: true,
 		Content: []mcpContent{
@@ -504,26 +531,24 @@ func TestCallWithToolCallError(t *testing.T) {
 		},
 	}
 	mcpResultJSON, _ := json.Marshal(mcpResult)
-	response := `{"jsonrpc":"2.0","id":1,"result":` + string(mcpResultJSON) + `}`
 
-	mp := newMockProcess([]string{response})
-	defer mp.Close()
-
-	client := &Client{
-		stdin:       mp.stdin,
-		stdout:      mp.stdout,
-		scanner:     bufio.NewScanner(mp.stdout),
-		encoder:     json.NewEncoder(mp.stdin),
-		timeout:     5 * time.Second,
-		initialized: true,
-	}
+	go func() {
+		scanner := bufio.NewScanner(stdinReader)
+		for scanner.Scan() {
+			var req jsonrpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				continue
+			}
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, string(mcpResultJSON))
+			stdoutWriter.Write([]byte(resp + "\n"))
+		}
+	}()
 
 	result, err := client.Call("failing_tool", nil)
 	if err != nil {
 		t.Fatalf("Call() returned error: %v", err)
 	}
 
-	// The result should indicate an error
 	if result.Success {
 		t.Error("expected success=false for tool error")
 	}
@@ -541,14 +566,15 @@ func TestNotify(t *testing.T) {
 	stdoutReader, _ := io.Pipe()
 
 	client := &Client{
-		stdin:   stdinWriter,
-		stdout:  stdoutReader,
-		scanner: bufio.NewScanner(stdoutReader),
-		encoder: json.NewEncoder(stdinWriter),
-		timeout: 5 * time.Second,
+		stdin:      stdinWriter,
+		stdout:     stdoutReader,
+		scanner:    bufio.NewScanner(stdoutReader),
+		encoder:    json.NewEncoder(stdinWriter),
+		timeout:    5 * time.Second,
+		pending:    make(map[int]chan jsonrpcResponse),
+		routerDone: make(chan struct{}),
 	}
 
-	// Capture the notification
 	var capturedNotification struct {
 		JSONRPC string         `json:"jsonrpc"`
 		Method  string         `json:"method"`
@@ -576,5 +602,168 @@ func TestNotify(t *testing.T) {
 	}
 	if capturedNotification.Method != "test/notification" {
 		t.Errorf("expected method=test/notification, got %v", capturedNotification.Method)
+	}
+}
+
+// TestResponseRouterEOF tests that pending callers are unblocked when the
+// provider process exits (scanner returns false).
+func TestResponseRouterEOF(t *testing.T) {
+	client, stdinReader, stdoutWriter, _ := newTestClientWithRouter(t)
+
+	// Drain stdin
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			_, err := stdinReader.Read(buf)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Start a call that will never get a response
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.call(context.Background(), "test_method", nil, nil)
+	}()
+
+	// Give time for the call to register in pending
+	time.Sleep(50 * time.Millisecond)
+
+	// Close stdout to simulate provider exit -> scanner EOF -> router exit
+	stdoutWriter.Close()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error when router exits")
+		}
+		if !strings.Contains(err.Error(), "response router") {
+			t.Errorf("expected 'response router' error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call() did not unblock after router exit")
+	}
+
+	// Wait for routerDone
+	<-client.routerDone
+
+	stdinReader.Close()
+}
+
+// TestResponseRouterOrphanedResponse tests that the router handles responses
+// for unknown IDs without panicking.
+func TestResponseRouterOrphanedResponse(t *testing.T) {
+	client, stdinReader, stdoutWriter, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
+	// Drain stdin
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			_, err := stdinReader.Read(buf)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Send a response with an ID that nobody is waiting for
+	orphanedResp := `{"jsonrpc":"2.0","id":9999,"result":{"key":"orphaned"}}` + "\n"
+	stdoutWriter.Write([]byte(orphanedResp))
+
+	// Give the router time to process
+	time.Sleep(50 * time.Millisecond)
+
+	// Now send a real request and verify it still works
+	validResp := make(chan struct{})
+	go func() {
+		// Wait for the request and respond
+		time.Sleep(10 * time.Millisecond)
+		// We need to read the request to know its ID
+		// Since we drained stdin above, just send a response for the next expected ID
+		client.pendingMu.Lock()
+		for id, ch := range client.pending {
+			ch <- jsonrpcResponse{
+				JSONRPC: "2.0",
+				ID:      id,
+				Result:  json.RawMessage(`{"key":"valid"}`),
+			}
+			delete(client.pending, id)
+			break
+		}
+		client.pendingMu.Unlock()
+		close(validResp)
+	}()
+
+	var result map[string]string
+	err := client.call(context.Background(), "test_method", nil, &result)
+	if err != nil {
+		t.Fatalf("call() after orphaned response returned error: %v", err)
+	}
+
+	<-validResp
+
+	if result["key"] != "valid" {
+		t.Errorf("expected result[key]=valid, got %v", result["key"])
+	}
+}
+
+// TestCallContextCancellation tests that cancelling the context properly
+// unblocks call() and cleans up the pending entry.
+func TestCallContextCancellation(t *testing.T) {
+	client, stdinReader, _, cleanup := newTestClientWithRouter(t)
+	defer cleanup()
+
+	// Drain stdin
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			_, err := stdinReader.Read(buf)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.call(ctx, "test_method", nil, nil)
+	}()
+
+	// Give time for the call to register
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify there is a pending entry
+	client.pendingMu.Lock()
+	pendingCount := len(client.pending)
+	client.pendingMu.Unlock()
+	if pendingCount != 1 {
+		t.Fatalf("expected 1 pending entry, got %d", pendingCount)
+	}
+
+	// Cancel the context
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("call() did not unblock after context cancellation")
+	}
+
+	// Give time for defer cleanup
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify pending map was cleaned up
+	client.pendingMu.Lock()
+	pendingCount = len(client.pending)
+	client.pendingMu.Unlock()
+	if pendingCount != 0 {
+		t.Errorf("expected 0 pending entries after cancellation, got %d", pendingCount)
 	}
 }

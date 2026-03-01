@@ -298,7 +298,7 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 	if prefix := artifact.Env["TESTENV_VM_NAME_PREFIX"]; prefix != "" {
 		libvirtVMName = prefix + "-" + libvirtVMName
 	}
-	testSSHConnectivity(t, artifact, libvirtVMName)
+	testSSHConnectivity(t, artifact, libvirtVMName, artifactDir)
 
 	// Cleanup
 	t.Log("Deleting test environment...")
@@ -321,7 +321,7 @@ func TestLibvirtVMLifecycle(t *testing.T) {
 // testSSHConnectivity tests SSH connection using the client library.
 // Uses LibvirtProvider to query libvirt directly for VM IP (more reliable
 // than ArtifactProvider when IP isn't available in metadata yet).
-func testSSHConnectivity(t *testing.T, artifact *v1.TestEnvArtifact, vmName string) {
+func testSSHConnectivity(t *testing.T, artifact *v1.TestEnvArtifact, vmName, artifactDir string) {
 	t.Helper()
 
 	// Get key path from artifact — try SSH command first (always absolute),
@@ -348,13 +348,11 @@ func testSSHConnectivity(t *testing.T, artifact *v1.TestEnvArtifact, vmName stri
 		t.Fatal("no SSH key found in artifact")
 	}
 
-	// Resolve relative paths against state dir
+	// Resolve relative paths against artifact directory (Files are relative to it)
 	if !filepath.IsAbs(keyPath) {
-		abs, err := filepath.Abs(keyPath)
-		if err == nil {
-			if _, statErr := os.Stat(abs); statErr == nil {
-				keyPath = abs
-			}
+		resolved := filepath.Join(artifactDir, keyPath)
+		if _, statErr := os.Stat(resolved); statErr == nil {
+			keyPath = resolved
 		}
 	}
 

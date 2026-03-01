@@ -42,15 +42,21 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		_ = p.conn.DomainUndefine(existingDom)
 	}
 
-	// Get network name from spec
-	networkName := req.Spec.Network
-	if networkName == "" {
-		return providerv1.ErrorResult(providerv1.NewInvalidSpecError("VM requires a network"))
+	// Resolve network names: Networks takes precedence over Network.
+	var networkNames []string
+	if len(req.Spec.Networks) > 0 {
+		networkNames = req.Spec.Networks
+	} else if req.Spec.Network != "" {
+		networkNames = []string{req.Spec.Network}
+	} else {
+		return providerv1.ErrorResult(providerv1.NewInvalidSpecError("VM requires at least one network (set network or networks)"))
 	}
 
-	// Verify network exists
-	if _, exists := p.networks[networkName]; !exists {
-		return providerv1.ErrorResult(providerv1.NewNotFoundError("network", networkName))
+	// Verify all networks exist
+	for _, netName := range networkNames {
+		if _, exists := p.networks[netName]; !exists {
+			return providerv1.ErrorResult(providerv1.NewNotFoundError("network", netName))
+		}
 	}
 
 	// Track created resources for rollback
@@ -103,16 +109,24 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		}
 	}
 
+	// Build NetworkInterface list. Only the first NIC gets PXE ROM.
+	nics := make([]NetworkInterface, len(networkNames))
+	for i, netName := range networkNames {
+		nics[i] = NetworkInterface{
+			Name:           netName,
+			HasNetworkBoot: hasNetworkBoot && i == 0,
+		}
+	}
+
 	domainConfig := DomainConfig{
-		Name:           req.Name,
-		MemoryMB:       memoryMB,
-		VCPU:           vcpu,
-		DiskPath:       diskPath,
-		CloudInitISO:   isoPath,
-		NetworkName:    networkName,
-		BootOrder:      req.Spec.Boot.Order,
-		Firmware:       req.Spec.Boot.Firmware,
-		HasNetworkBoot: hasNetworkBoot,
+		Name:         req.Name,
+		MemoryMB:     memoryMB,
+		VCPU:         vcpu,
+		DiskPath:     diskPath,
+		CloudInitISO: isoPath,
+		Networks:     nics,
+		BootOrder:    req.Spec.Boot.Order,
+		Firmware:     req.Spec.Boot.Firmware,
 	}
 
 	// Generate domain XML
@@ -130,13 +144,27 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	// Domain created successfully, clear cleanup funcs
 	cleanupFuncs = nil
 
-	// Get domain XML to extract MAC address
+	// Get domain XML to extract MAC addresses for all NICs
 	xmlDesc, err := p.conn.DomainGetXMLDesc(dom, 0)
 	if err != nil {
-		// Non-fatal: continue without MAC
+		// Non-fatal: continue without MACs
 		xmlDesc = ""
 	}
-	mac := extractMACFromDomainXML(xmlDesc)
+	allMACs := extractAllMACsFromDomainXML(xmlDesc)
+
+	// Build per-network MAC map. MAC order matches NIC order which matches networkNames order.
+	macsByNet := make(map[string]string, len(networkNames))
+	for i, netName := range networkNames {
+		if i < len(allMACs) {
+			macsByNet[netName] = allMACs[i]
+		}
+	}
+
+	// First NIC MAC for backward compat
+	mac := ""
+	if len(allMACs) > 0 {
+		mac = allMACs[0]
+	}
 
 	// Determine whether strict readiness checks are required
 	sshReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.SSH != nil
@@ -164,12 +192,12 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		// Best-effort: log and continue without boot verification
 	}
 
-	// Resolve IP with remaining budget (total minus time already spent on boot check)
+	// Resolve IP for the first NIC (primary) using remaining budget
 	remaining := ipTimeout - time.Since(bootStart)
 	if remaining < 30*time.Second {
 		remaining = 30 * time.Second // minimum 30s for DHCP
 	}
-	ip, err := resolveIP(p.conn, networkName, mac, remaining)
+	ip, err := resolveIP(p.conn, networkNames[0], mac, remaining)
 
 	// Fallback: try ARP resolution for VMs with static IPs (no DHCP lease)
 	if err != nil || ip == "" {
@@ -214,6 +242,24 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		}
 	}
 
+	// Build per-network IP map. For secondary NICs, best-effort resolution.
+	ipsByNet := make(map[string]string, len(networkNames))
+	if ip != "" {
+		ipsByNet[networkNames[0]] = ip
+	}
+	// Best-effort: resolve secondary NIC IPs (non-blocking, short timeout)
+	for i := 1; i < len(networkNames); i++ {
+		netName := networkNames[i]
+		nicMAC := macsByNet[netName]
+		if nicMAC == "" {
+			continue
+		}
+		nicIP, nicErr := resolveIP(p.conn, netName, nicMAC, 5*time.Second)
+		if nicErr == nil && nicIP != "" {
+			ipsByNet[netName] = nicIP
+		}
+	}
+
 	// Generate SSH command if we have an IP and matched keys
 	sshCommand := ""
 	username := "ubuntu" // default username
@@ -234,13 +280,15 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		Status:     "running",
 		IP:         ip,
 		MAC:        mac,
+		IPs:        ipsByNet,
+		MACs:       macsByNet,
 		UUID:       formatUUID(dom.UUID),
 		SSHCommand: sshCommand,
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		ProviderState: map[string]any{
 			"diskPath":     diskPath,
 			"cloudInitISO": isoPath,
-			"network":      networkName,
+			"networks":     networkNames,
 			"keys":         ciConfig.MatchedKeyNames,
 		},
 	}

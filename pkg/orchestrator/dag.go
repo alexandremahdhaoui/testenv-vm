@@ -149,19 +149,27 @@ func BuildDAG(testenvSpec *v1.Spec) (*DAG, error) {
 			}
 		}
 
-		// Check for network field (explicit network dependency)
-		if vm.Spec.Network != "" {
-			// Check if network contains a template
+		// Check for network fields (explicit network dependency).
+		// Networks takes precedence over Network for dependency resolution.
+		netNames := vm.Spec.Networks
+		if len(netNames) == 0 && vm.Spec.Network != "" {
+			netNames = []string{vm.Spec.Network}
+		}
+		for _, netName := range netNames {
+			if netName == "" {
+				continue
+			}
+			// Check if network name contains a template
 			networkRefs := spec.ExtractTemplateRefs(struct {
 				Network string
-			}{Network: vm.Spec.Network})
+			}{Network: netName})
 
 			if len(networkRefs) > 0 {
 				// Template reference already extracted above
 				continue
 			}
 			// network is a literal network name
-			networkRef := v1.ResourceRef{Kind: "network", Name: vm.Spec.Network}
+			networkRef := v1.ResourceRef{Kind: "network", Name: netName}
 			if err := dag.AddEdge(fromRef, networkRef); err != nil {
 				return nil, fmt.Errorf("failed to add network edge from vm %q: %w", vm.Name, err)
 			}
