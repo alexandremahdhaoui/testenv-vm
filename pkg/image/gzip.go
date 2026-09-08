@@ -40,6 +40,7 @@ func decompressGzip(compressedPath, outputPath string) error {
 		return fmt.Errorf("reading gzip header of %s: %w", compressedPath, err)
 	}
 	defer func() { _ = reader.Close() }()
+	reader.Multistream(false)
 
 	output, err := os.Create(outputPath)
 	if err != nil {

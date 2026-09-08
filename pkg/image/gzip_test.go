@@ -146,6 +146,26 @@ func TestEnsureImageSkipsTheDownloadOnASecondRunOfAGzipSource(t *testing.T) {
 	}
 }
 
+func TestDecompressGzipIgnoresPaddingAfterTheGzipStreamAsOpenWrtImagesCarry(t *testing.T) {
+	dir := t.TempDir()
+	padded := append(gzipBytes(t, "raw disk image bytes"), make([]byte, 4096)...)
+	compressedPath := filepath.Join(dir, "padded.img.gz")
+	if err := os.WriteFile(compressedPath, padded, 0o644); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+	outputPath := filepath.Join(dir, "padded.img")
+	if err := decompressGzip(compressedPath, outputPath); err != nil {
+		t.Fatalf("decompressGzip() unexpected error: %v", err)
+	}
+	got, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("reading output: %v", err)
+	}
+	if string(got) != "raw disk image bytes" {
+		t.Errorf("decompressed content = %q, want %q", string(got), "raw disk image bytes")
+	}
+}
+
 func TestDecompressGzipRefusesAFileThatIsNotGzip(t *testing.T) {
 	dir := t.TempDir()
 	plain := filepath.Join(dir, "plain.gz")
