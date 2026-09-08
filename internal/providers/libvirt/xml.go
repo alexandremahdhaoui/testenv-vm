@@ -49,6 +49,7 @@ type DomainConfig struct {
 	VCPU         int
 	DiskPath     string
 	CloudInitISO string
+	CdromPath    string
 	Networks     []NetworkInterface // One or more NICs to attach.
 	BootOrder    []string           // Boot device order: "network", "hd", "cdrom"
 	Firmware     string             // "bios" or "uefi"
@@ -108,6 +109,24 @@ func parseCIDR(cidr string) (gateway, netmask, dhcpStart, dhcpEnd string, err er
 	}
 
 	return gateway, netmask, dhcpStart, dhcpEnd, nil
+}
+
+func resolveGateway(cidr, defaultGateway, declaredGateway string) (string, error) {
+	if declaredGateway == "" {
+		return defaultGateway, nil
+	}
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", fmt.Errorf("parsing cidr %s: %w", cidr, err)
+	}
+	declared := net.ParseIP(declaredGateway)
+	if declared == nil {
+		return "", fmt.Errorf("gateway %s is not an IP address", declaredGateway)
+	}
+	if !ipNet.Contains(declared) {
+		return "", fmt.Errorf("gateway %s is outside %s", declaredGateway, cidr)
+	}
+	return declaredGateway, nil
 }
 
 // Network XML templates
@@ -187,12 +206,20 @@ const domainTemplate = `<domain type='kvm'>
             <source file='{{.DiskPath}}'/>
             <target dev='vda' bus='virtio'/>
         </disk>
+{{if .CdromPath}}
+        <disk type='file' device='cdrom'>
+            <driver name='qemu' type='raw'/>
+            <source file='{{.CdromPath}}'/>
+            <target dev='sda' bus='sata'/>
+            <readonly/>
+        </disk>
+{{end}}
 {{if .CloudInitISO}}
         <!-- Cloud-init ISO -->
         <disk type='file' device='cdrom'>
             <driver name='qemu' type='raw'/>
             <source file='{{.CloudInitISO}}'/>
-            <target dev='sda' bus='sata'/>
+            <target dev='{{if .CdromPath}}sdb{{else}}sda{{end}}' bus='sata'/>
             <readonly/>
         </disk>
 {{end}}

@@ -140,7 +140,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		if _, err := os.Stat(existing.LocalPath); err == nil {
 			// Verify checksum if we have one
 			if expectedSHA256 != "" {
-				if err := m.downloader.VerifyChecksum(existing.LocalPath, expectedSHA256); err == nil {
+				if err := m.downloader.VerifyChecksum(existing.verifiedPath(), expectedSHA256); err == nil {
 					// Cache hit - return existing state
 					return existing, nil
 				}
@@ -297,29 +297,43 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		}
 	}
 
-	// Get file info
-	fileInfo, err := os.Stat(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat downloaded file: %w", err)
-	}
-
 	// Compute actual checksum
 	actualSHA256, err := m.computeChecksum(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute checksum: %w", err)
 	}
 
+	compressedPath := ""
+	if strings.HasSuffix(localPath, ".gz") {
+		compressedPath = localPath
+		localPath = strings.TrimSuffix(localPath, ".gz")
+		if err := decompressGzip(compressedPath, localPath); err != nil {
+			_ = os.Remove(localPath)
+			m.mu.Lock()
+			m.metadata.Images[key].Status = StatusFailed
+			_ = m.saveMetadata()
+			m.mu.Unlock()
+			return nil, fmt.Errorf("decompressing image %s: %w", compressedPath, err)
+		}
+	}
+
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat downloaded file: %w", err)
+	}
+
 	// Update metadata with success
 	m.mu.Lock()
 	state := &ImageState{
-		Name:         name,
-		Source:       source,
-		ResolvedURL:  resolvedURL,
-		LocalPath:    localPath,
-		SHA256:       actualSHA256,
-		Size:         fileInfo.Size(),
-		DownloadedAt: time.Now(),
-		Status:       StatusReady,
+		Name:           name,
+		Source:         source,
+		ResolvedURL:    resolvedURL,
+		LocalPath:      localPath,
+		CompressedPath: compressedPath,
+		SHA256:         actualSHA256,
+		Size:           fileInfo.Size(),
+		DownloadedAt:   time.Now(),
+		Status:         StatusReady,
 	}
 	m.metadata.Images[key] = state
 	m.metadata.UpdatedAt = time.Now()

@@ -52,6 +52,8 @@ type VMSpec struct {
 	Networks []string `json:"networks,omitempty"`
 	// CloudInit configuration.
 	CloudInit *CloudInitSpec `json:"cloudInit,omitempty"`
+	// Cdrom is the path to an ISO attached as a cdrom device.
+	Cdrom string `json:"cdrom,omitempty"`
 	// Boot configuration.
 	Boot BootSpec `json:"boot"`
 	// Console access configuration.

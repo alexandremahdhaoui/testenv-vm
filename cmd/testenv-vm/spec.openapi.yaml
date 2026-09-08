@@ -309,6 +309,9 @@ components:
           description: List of network resource names to attach. Takes precedence over network.
         cloudInit:
           $ref: '#/components/schemas/CloudInitSpec'
+        cdrom:
+          type: string
+          description: Path to an ISO attached as a cdrom device. A template such as {{ .Images.name.Path }} resolves it through the image cache.
         boot:
           $ref: '#/components/schemas/BootSpec'
         readiness:

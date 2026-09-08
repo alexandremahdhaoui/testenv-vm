@@ -15,46 +15,62 @@
 package libvirt
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 )
 
-// createDisk creates a QCOW2 disk image.
-// If baseImage is provided, it creates a disk with the base image as a backing store.
-// If baseImage is empty, it creates a standalone disk.
 func createDisk(baseImage, outputPath, size, qemuImgPath string) error {
-	// Apply default size if not specified
 	if size == "" {
 		size = "20G"
 	}
 
-	var cmd *exec.Cmd
-	if baseImage != "" {
-		// Verify base image exists
-		if _, err := os.Stat(baseImage); err != nil {
-			return fmt.Errorf("base image not found: %s", baseImage)
-		}
-
-		// Create disk with backing store
-		cmd = exec.Command(qemuImgPath, "create",
-			"-f", "qcow2",
-			"-F", "qcow2",
-			"-b", baseImage,
-			outputPath,
-			size)
-	} else {
-		// Create standalone disk
-		cmd = exec.Command(qemuImgPath, "create",
-			"-f", "qcow2",
-			outputPath,
-			size)
+	if baseImage == "" {
+		return runQemuImg(qemuImgPath, "create", "-f", "qcow2", outputPath, size)
 	}
 
-	output, err := cmd.CombinedOutput()
+	if _, err := os.Stat(baseImage); err != nil {
+		return fmt.Errorf("base image not found: %s", baseImage)
+	}
+
+	format, err := detectImageFormat(qemuImgPath, baseImage)
+	if err != nil {
+		return fmt.Errorf("detecting format of base image %s: %w", baseImage, err)
+	}
+
+	return runQemuImg(qemuImgPath, overlayArgs(baseImage, format, outputPath, size)...)
+}
+
+func overlayArgs(baseImage, backingFormat, outputPath, size string) []string {
+	return []string{"create", "-f", "qcow2", "-F", backingFormat, "-b", baseImage, outputPath, size}
+}
+
+func detectImageFormat(qemuImgPath, imagePath string) (string, error) {
+	output, err := exec.Command(qemuImgPath, "info", "--output=json", imagePath).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("running qemu-img info on %s: %w, output: %s", imagePath, err, string(output))
+	}
+	return parseImageFormat(output)
+}
+
+func parseImageFormat(qemuImgInfoJSON []byte) (string, error) {
+	var info struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(qemuImgInfoJSON, &info); err != nil {
+		return "", fmt.Errorf("parsing qemu-img info output: %w", err)
+	}
+	if info.Format == "" {
+		return "", fmt.Errorf("qemu-img info output names no format")
+	}
+	return info.Format, nil
+}
+
+func runQemuImg(qemuImgPath string, args ...string) error {
+	output, err := exec.Command(qemuImgPath, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create disk: %w, output: %s", err, string(output))
 	}
-
 	return nil
 }

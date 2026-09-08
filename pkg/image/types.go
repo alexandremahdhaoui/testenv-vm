@@ -45,6 +45,8 @@ type ImageState struct {
 	LocalPath string `json:"localPath"`
 	// SHA256 is the computed SHA256 checksum of the downloaded file.
 	SHA256 string `json:"sha256"`
+	// CompressedPath is the downloaded archive when the source is gzip compressed.
+	CompressedPath string `json:"compressedPath,omitempty"`
 	// Size is the size of the downloaded file in bytes.
 	Size int64 `json:"size"`
 	// DownloadedAt is the timestamp when the image was downloaded.

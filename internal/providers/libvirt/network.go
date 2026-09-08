@@ -65,6 +65,10 @@ func (p *Provider) NetworkCreate(req *providerv1.NetworkCreateRequest) *provider
 	if err != nil {
 		return providerv1.ErrorResult(providerv1.NewInvalidSpecError("invalid CIDR: " + err.Error()))
 	}
+	gateway, err = resolveGateway(cidr, gateway, req.Spec.Gateway)
+	if err != nil {
+		return providerv1.ErrorResult(providerv1.NewInvalidSpecError("invalid gateway: " + err.Error()))
+	}
 
 	// Generate bridge name
 	bridgeName := generateBridgeName(req.Name)

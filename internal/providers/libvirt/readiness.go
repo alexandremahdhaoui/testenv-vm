@@ -109,7 +109,40 @@ func waitForReadiness(spec *providerv1.ReadinessSpec, ip string) *providerv1.Ope
 		}
 	}
 
+	if spec.TCP != nil && spec.TCP.Port > 0 {
+		if err := waitForTCP(spec.TCP, ip); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func waitForTCP(spec *providerv1.TCPReadinessSpec, ip string) *providerv1.OperationError {
+	timeout := readinessTimeout(spec.Timeout, 3*time.Minute)
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", spec.Port))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err == nil {
+			_ = conn.Close()
+			log.Printf("TCP readiness check passed for %s", addr)
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return providerv1.NewTimeoutError(fmt.Sprintf("tcp readiness on %s after %s", addr, timeout))
+}
+
+func readinessTimeout(declared string, fallback time.Duration) time.Duration {
+	if declared == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(declared)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 // waitForSSH polls for SSH connectivity until the timeout is reached.

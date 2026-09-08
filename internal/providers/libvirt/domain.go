@@ -82,13 +82,20 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	}
 	cleanupFuncs = append(cleanupFuncs, func() { _ = os.Remove(diskPath) })
 
-	// Generate cloud-init ISO
-	isoPath = filepath.Join(p.config.StateDir, "cloudinit", req.Name+".iso")
 	ciConfig := cloudInitConfigFromVMSpec(req.Name, &req.Spec, p.keys)
-	if err := generateCloudInitISO(ciConfig, isoPath, p.config.ISOTool); err != nil {
-		return providerv1.ErrorResult(providerv1.NewProviderError("failed to generate cloud-init ISO: "+err.Error(), false))
+	if req.Spec.CloudInit != nil {
+		isoPath = filepath.Join(p.config.StateDir, "cloudinit", req.Name+".iso")
+		if err := generateCloudInitISO(ciConfig, isoPath, p.config.ISOTool); err != nil {
+			return providerv1.ErrorResult(providerv1.NewProviderError("failed to generate cloud-init ISO: "+err.Error(), false))
+		}
+		cleanupFuncs = append(cleanupFuncs, func() { _ = os.Remove(isoPath) })
 	}
-	cleanupFuncs = append(cleanupFuncs, func() { _ = os.Remove(isoPath) })
+
+	if req.Spec.Cdrom != "" {
+		if _, err := os.Stat(req.Spec.Cdrom); err != nil {
+			return providerv1.ErrorResult(providerv1.NewInvalidSpecError("cdrom ISO not found: " + req.Spec.Cdrom))
+		}
+	}
 
 	// Build domain config
 	memoryMB := 2048
@@ -124,6 +131,7 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		VCPU:         vcpu,
 		DiskPath:     diskPath,
 		CloudInitISO: isoPath,
+		CdromPath:    req.Spec.Cdrom,
 		Networks:     nics,
 		BootOrder:    req.Spec.Boot.Order,
 		Firmware:     req.Spec.Boot.Firmware,
@@ -166,16 +174,14 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		mac = allMACs[0]
 	}
 
-	// Determine whether strict readiness checks are required
 	sshReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.SSH != nil
-	ipTimeout := 60 * time.Second // best-effort default
+	tcpReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.TCP != nil
+	strictReadiness := sshReadiness || tcpReadiness
+	ipTimeout := 60 * time.Second
 	if sshReadiness {
-		ipTimeout = 3 * time.Minute // strict default
-		if req.Spec.Readiness.SSH.Timeout != "" {
-			if d, err := time.ParseDuration(req.Spec.Readiness.SSH.Timeout); err == nil {
-				ipTimeout = d
-			}
-		}
+		ipTimeout = readinessTimeout(req.Spec.Readiness.SSH.Timeout, 3*time.Minute)
+	} else if tcpReadiness {
+		ipTimeout = readinessTimeout(req.Spec.Readiness.TCP.Timeout, 3*time.Minute)
 	}
 
 	// Wait for VM boot (60s fixed budget, capped to half of total)
@@ -185,7 +191,7 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	}
 	bootStart := time.Now()
 	if err := waitForVMBoot(p.conn, dom, bootTimeout); err != nil {
-		if sshReadiness {
+		if strictReadiness {
 			return providerv1.ErrorResult(providerv1.NewProviderError(
 				fmt.Sprintf("VM %s failed boot check: %s", req.Name, err.Error()), true))
 		}
@@ -197,7 +203,10 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	if remaining < 30*time.Second {
 		remaining = 30 * time.Second // minimum 30s for DHCP
 	}
-	ip, err := resolveIP(p.conn, networkNames[0], mac, remaining)
+	ip := extractStaticIP(req.Spec.CloudInit)
+	if ip == "" {
+		ip, err = resolveIP(p.conn, networkNames[0], mac, remaining)
+	}
 
 	// Fallback: try ARP resolution for VMs with static IPs (no DHCP lease)
 	if err != nil || ip == "" {
@@ -207,33 +216,19 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		}
 	}
 
-	// Fallback: extract static IP from CloudInit networkConfig
-	if (err != nil || ip == "") && req.Spec.CloudInit != nil {
-		if staticIP := extractStaticIP(req.Spec.CloudInit); staticIP != "" {
-			ip = staticIP
-			err = nil
-		}
-	}
-
-	if sshReadiness {
+	if strictReadiness {
 		if err != nil || ip == "" {
 			return providerv1.ErrorResult(providerv1.NewTimeoutError("ip-resolution"))
 		}
-		if ip == "" {
-			return providerv1.ErrorResult(providerv1.NewProviderError(
-				fmt.Sprintf("VM %s: resolved empty IP without error", req.Name), true))
-		}
-		// Validate IP reachability via TCP probe to SSH port
-		if err := validateIPReachability(ip, 22, 10*time.Second); err != nil {
-			return providerv1.ErrorResult(providerv1.NewProviderError(
-				fmt.Sprintf("VM %s IP %s not reachable: %s", req.Name, ip, err.Error()), true))
+		if sshReadiness {
+			if err := validateIPReachability(ip, 22, 10*time.Second); err != nil {
+				return providerv1.ErrorResult(providerv1.NewProviderError(
+					fmt.Sprintf("VM %s IP %s not reachable: %s", req.Name, ip, err.Error()), true))
+			}
 		}
 
-		// Run SSH and cloud-init readiness checks if configured
-		if req.Spec.Readiness != nil {
-			if opErr := waitForReadiness(req.Spec.Readiness, ip); opErr != nil {
-				return providerv1.ErrorResult(opErr)
-			}
+		if opErr := waitForReadiness(req.Spec.Readiness, ip); opErr != nil {
+			return providerv1.ErrorResult(opErr)
 		}
 	} else {
 		// Best-effort: use resolved IP if available, empty string otherwise

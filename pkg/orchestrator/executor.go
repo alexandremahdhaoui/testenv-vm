@@ -694,6 +694,7 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		VCPUs:    spec.Vcpus,
 		Network:  network,
 		Networks: networks,
+		Cdrom:    spec.Cdrom,
 		Disk: providerv1.DiskSpec{
 			BaseImage: spec.Disk.BaseImage,
 			Size:      spec.Disk.Size,
