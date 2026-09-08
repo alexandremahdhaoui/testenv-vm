@@ -496,6 +496,9 @@ components:
         port:
           type: integer
           description: Port to check for TCP connectivity.
+        address:
+          type: string
+          description: Address to dial when the guest holds a static address the host cannot learn from a DHCP lease. The provider reports it as the VM address.
         timeout:
           type: string
           description: 'Timeout for port to become available (e.g., 5m).'

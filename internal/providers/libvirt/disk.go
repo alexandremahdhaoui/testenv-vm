@@ -31,7 +31,7 @@ func createDisk(baseImage, outputPath, size, qemuImgPath string) error {
 	}
 
 	if _, err := os.Stat(baseImage); err != nil {
-		return fmt.Errorf("base image not found: %s", baseImage)
+		return fmt.Errorf("base image not found: %s: %w", baseImage, err)
 	}
 
 	format, err := detectImageFormat(qemuImgPath, baseImage)

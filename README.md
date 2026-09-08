@@ -52,6 +52,8 @@ engines:
                       sshAuthorizedKeys: ["{{ .Keys.vm-ssh.PublicKey }}"]
 ```
 
+The provider `engine` line keeps `go://` because `pkg/provider/manager.go` resolves that prefix itself and takes `go://` or a binary path only.
+
 ```bash
 # Run tests with VM infrastructure
 forge test run e2e

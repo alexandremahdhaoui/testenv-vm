@@ -72,14 +72,47 @@ func TestWaitForReadinessRunsTheTCPCheckWithoutSSH(t *testing.T) {
 	}
 }
 
-func TestReadinessTimeoutFallsBackOnAnEmptyOrInvalidDuration(t *testing.T) {
-	if got := readinessTimeout("", time.Minute); got != time.Minute {
-		t.Errorf("readinessTimeout(\"\") = %v, want %v", got, time.Minute)
+func TestReadinessTimeoutFallsBackOnAnEmptyDurationAndRefusesABadOne(t *testing.T) {
+	got, opErr := readinessTimeout("tcp", "", time.Minute)
+	if opErr != nil || got != time.Minute {
+		t.Errorf("readinessTimeout(\"\") = %v, %v, want %v and no error", got, opErr, time.Minute)
 	}
-	if got := readinessTimeout("soon", time.Minute); got != time.Minute {
-		t.Errorf("readinessTimeout(\"soon\") = %v, want %v", got, time.Minute)
+	got, opErr = readinessTimeout("tcp", "5m", time.Minute)
+	if opErr != nil || got != 5*time.Minute {
+		t.Errorf("readinessTimeout(\"5m\") = %v, %v, want %v and no error", got, opErr, 5*time.Minute)
 	}
-	if got := readinessTimeout("5m", time.Minute); got != 5*time.Minute {
-		t.Errorf("readinessTimeout(\"5m\") = %v, want %v", got, 5*time.Minute)
+	_, opErr = readinessTimeout("tcp", "soon", time.Minute)
+	if opErr == nil || !strings.Contains(opErr.Message, `"soon"`) {
+		t.Errorf("readinessTimeout(\"soon\") should refuse and name the value, got: %v", opErr)
+	}
+}
+
+func TestWaitForTCPDialsTheDeclaredAddressInsteadOfTheResolvedIP(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	opErr := waitForTCP(&providerv1.TCPReadinessSpec{Port: port, Address: "127.0.0.1", Timeout: "10s"}, "203.0.113.1")
+	if opErr != nil {
+		t.Errorf("waitForTCP() unexpected error: %v", opErr)
+	}
+}
+
+func TestIPResolutionBudgetRefusesABadTCPTimeout(t *testing.T) {
+	_, opErr := ipResolutionBudget(&providerv1.ReadinessSpec{TCP: &providerv1.TCPReadinessSpec{Port: 22, Timeout: "later"}})
+	if opErr == nil || !strings.Contains(opErr.Message, `"later"`) {
+		t.Errorf("ipResolutionBudget() should refuse and name the value, got: %v", opErr)
+	}
+}
+
+func TestDeclaredTCPAddressWinsOverEveryOtherResolution(t *testing.T) {
+	if got := declaredTCPAddress(&providerv1.ReadinessSpec{TCP: &providerv1.TCPReadinessSpec{Port: 22, Address: "192.168.1.1"}}); got != "192.168.1.1" {
+		t.Errorf("declaredTCPAddress() = %q, want 192.168.1.1", got)
+	}
+	if got := declaredTCPAddress(nil); got != "" {
+		t.Errorf("declaredTCPAddress(nil) = %q, want empty", got)
 	}
 }

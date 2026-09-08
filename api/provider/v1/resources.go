@@ -244,6 +244,8 @@ type SSHReadinessSpec struct {
 type TCPReadinessSpec struct {
 	// Port to check.
 	Port int `json:"port"`
+	// Address to dial when the guest holds a static address no DHCP lease reveals.
+	Address string `json:"address,omitempty"`
 	// Timeout for port to become available.
 	Timeout string `json:"timeout"`
 }

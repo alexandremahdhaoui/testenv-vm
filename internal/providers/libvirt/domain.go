@@ -23,9 +23,6 @@ import (
 	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
 )
 
-// VMCreate creates a VM via libvirt.
-// This function is idempotent: if a VM with the same name already exists
-// in libvirt (e.g., from a previous failed run), it will be cleaned up first.
 func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.OperationResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -34,50 +31,46 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		return providerv1.ErrorResult(providerv1.NewAlreadyExistsError("vm", req.Name))
 	}
 
-	// Check if domain already exists in libvirt (orphaned from previous run)
-	// If so, clean it up to ensure idempotent behavior
 	if existingDom, err := p.conn.DomainLookupByName(req.Name); err == nil {
-		// Domain exists in libvirt but not in our state - clean it up
 		_ = p.conn.DomainDestroy(existingDom)
 		_ = p.conn.DomainUndefine(existingDom)
 	}
 
-	// Resolve network names: Networks takes precedence over Network.
-	var networkNames []string
-	if len(req.Spec.Networks) > 0 {
-		networkNames = req.Spec.Networks
-	} else if req.Spec.Network != "" {
-		networkNames = []string{req.Spec.Network}
-	} else {
-		return providerv1.ErrorResult(providerv1.NewInvalidSpecError("VM requires at least one network (set network or networks)"))
+	networkNames, specErr := requestedNetworkNames(&req.Spec)
+	if specErr != nil {
+		return providerv1.ErrorResult(specErr)
 	}
-
-	// Verify all networks exist
 	for _, netName := range networkNames {
 		if _, exists := p.networks[netName]; !exists {
 			return providerv1.ErrorResult(providerv1.NewNotFoundError("network", netName))
 		}
 	}
 
-	// Track created resources for rollback
+	if req.Spec.Cdrom != "" {
+		if _, err := os.Stat(req.Spec.Cdrom); err != nil {
+			return providerv1.ErrorResult(providerv1.NewInvalidSpecError(fmt.Sprintf("cdrom ISO %s: %v", req.Spec.Cdrom, err)))
+		}
+	}
+
+	ipTimeout, timeoutErr := ipResolutionBudget(req.Spec.Readiness)
+	if timeoutErr != nil {
+		return providerv1.ErrorResult(timeoutErr)
+	}
+
 	var diskPath, isoPath string
 	var cleanupFuncs []func()
 	defer func() {
-		// Execute cleanup in reverse order if we exit with an error
 		for i := len(cleanupFuncs) - 1; i >= 0; i-- {
 			cleanupFuncs[i]()
 		}
 	}()
 
-	// Create disk image
 	diskPath = filepath.Join(p.config.StateDir, "disks", req.Name+".qcow2")
-	baseImage := req.Spec.Disk.BaseImage
 	diskSize := req.Spec.Disk.Size
 	if diskSize == "" {
 		diskSize = "20G"
 	}
-
-	if err := createDisk(baseImage, diskPath, diskSize, p.config.QemuImgPath); err != nil {
+	if err := createDisk(req.Spec.Disk.BaseImage, diskPath, diskSize, p.config.QemuImgPath); err != nil {
 		return providerv1.ErrorResult(providerv1.NewProviderError("failed to create disk: "+err.Error(), false))
 	}
 	cleanupFuncs = append(cleanupFuncs, func() { _ = os.Remove(diskPath) })
@@ -91,13 +84,6 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		cleanupFuncs = append(cleanupFuncs, func() { _ = os.Remove(isoPath) })
 	}
 
-	if req.Spec.Cdrom != "" {
-		if _, err := os.Stat(req.Spec.Cdrom); err != nil {
-			return providerv1.ErrorResult(providerv1.NewInvalidSpecError("cdrom ISO not found: " + req.Spec.Cdrom))
-		}
-	}
-
-	// Build domain config
 	memoryMB := 2048
 	vcpu := 2
 	if req.Spec.Memory > 0 {
@@ -107,142 +93,83 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		vcpu = req.Spec.VCPUs
 	}
 
-	// Check if network boot is enabled
-	hasNetworkBoot := false
-	for _, dev := range req.Spec.Boot.Order {
-		if dev == "network" {
-			hasNetworkBoot = true
-			break
-		}
-	}
-
-	// Build NetworkInterface list. Only the first NIC gets PXE ROM.
-	nics := make([]NetworkInterface, len(networkNames))
-	for i, netName := range networkNames {
-		nics[i] = NetworkInterface{
-			Name:           netName,
-			HasNetworkBoot: hasNetworkBoot && i == 0,
-		}
-	}
-
-	domainConfig := DomainConfig{
+	domainXML, err := generateDomainXML(DomainConfig{
 		Name:         req.Name,
 		MemoryMB:     memoryMB,
 		VCPU:         vcpu,
 		DiskPath:     diskPath,
 		CloudInitISO: isoPath,
 		CdromPath:    req.Spec.Cdrom,
-		Networks:     nics,
+		Networks:     networkInterfaces(networkNames, req.Spec.Boot.Order),
 		BootOrder:    req.Spec.Boot.Order,
 		Firmware:     req.Spec.Boot.Firmware,
-	}
-
-	// Generate domain XML
-	domainXML, err := generateDomainXML(domainConfig)
+	})
 	if err != nil {
 		return providerv1.ErrorResult(providerv1.NewProviderError("failed to generate domain XML: "+err.Error(), false))
 	}
 
-	// Create and start the domain
 	dom, err := p.conn.DomainCreateXML(domainXML, 0)
 	if err != nil {
 		return providerv1.ErrorResult(providerv1.NewProviderError("failed to create domain: "+err.Error(), true))
 	}
-
-	// Domain created successfully, clear cleanup funcs
 	cleanupFuncs = nil
 
-	// Get domain XML to extract MAC addresses for all NICs
 	xmlDesc, err := p.conn.DomainGetXMLDesc(dom, 0)
 	if err != nil {
-		// Non-fatal: continue without MACs
 		xmlDesc = ""
 	}
 	allMACs := extractAllMACsFromDomainXML(xmlDesc)
-
-	// Build per-network MAC map. MAC order matches NIC order which matches networkNames order.
 	macsByNet := make(map[string]string, len(networkNames))
 	for i, netName := range networkNames {
 		if i < len(allMACs) {
 			macsByNet[netName] = allMACs[i]
 		}
 	}
-
-	// First NIC MAC for backward compat
 	mac := ""
 	if len(allMACs) > 0 {
 		mac = allMACs[0]
 	}
 
-	sshReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.SSH != nil
-	tcpReadiness := req.Spec.Readiness != nil && req.Spec.Readiness.TCP != nil
-	strictReadiness := sshReadiness || tcpReadiness
-	ipTimeout := 60 * time.Second
-	if sshReadiness {
-		ipTimeout = readinessTimeout(req.Spec.Readiness.SSH.Timeout, 3*time.Minute)
-	} else if tcpReadiness {
-		ipTimeout = readinessTimeout(req.Spec.Readiness.TCP.Timeout, 3*time.Minute)
-	}
+	strictReadiness := hasStrictReadiness(req.Spec.Readiness)
 
-	// Wait for VM boot (60s fixed budget, capped to half of total)
 	bootTimeout := 60 * time.Second
 	if bootTimeout > ipTimeout {
 		bootTimeout = ipTimeout / 2
 	}
 	bootStart := time.Now()
-	if err := waitForVMBoot(p.conn, dom, bootTimeout); err != nil {
-		if strictReadiness {
-			return providerv1.ErrorResult(providerv1.NewProviderError(
-				fmt.Sprintf("VM %s failed boot check: %s", req.Name, err.Error()), true))
-		}
-		// Best-effort: log and continue without boot verification
+	if err := waitForVMBoot(p.conn, dom, bootTimeout); err != nil && strictReadiness {
+		return providerv1.ErrorResult(providerv1.NewProviderError(
+			fmt.Sprintf("VM %s failed boot check: %s", req.Name, err.Error()), true))
 	}
 
-	// Resolve IP for the first NIC (primary) using remaining budget
 	remaining := ipTimeout - time.Since(bootStart)
 	if remaining < 30*time.Second {
-		remaining = 30 * time.Second // minimum 30s for DHCP
+		remaining = 30 * time.Second
 	}
-	ip := extractStaticIP(req.Spec.CloudInit)
-	if ip == "" {
-		ip, err = resolveIP(p.conn, networkNames[0], mac, remaining)
-	}
-
-	// Fallback: try ARP resolution for VMs with static IPs (no DHCP lease)
-	if err != nil || ip == "" {
-		if arpIP := resolveIPFromARP(p.conn, dom); arpIP != "" {
-			ip = arpIP
-			err = nil
-		}
-	}
+	ip, err := p.resolvePrimaryIP(req, dom, networkNames[0], mac, remaining)
 
 	if strictReadiness {
 		if err != nil || ip == "" {
-			return providerv1.ErrorResult(providerv1.NewTimeoutError("ip-resolution"))
+			return providerv1.ErrorResult(providerv1.NewTimeoutError(
+				fmt.Sprintf("ip resolution for vm %s on network %s", req.Name, networkNames[0])))
 		}
-		if sshReadiness {
+		if req.Spec.Readiness.SSH != nil {
 			if err := validateIPReachability(ip, 22, 10*time.Second); err != nil {
 				return providerv1.ErrorResult(providerv1.NewProviderError(
 					fmt.Sprintf("VM %s IP %s not reachable: %s", req.Name, ip, err.Error()), true))
 			}
 		}
-
 		if opErr := waitForReadiness(req.Spec.Readiness, ip); opErr != nil {
 			return providerv1.ErrorResult(opErr)
 		}
-	} else {
-		// Best-effort: use resolved IP if available, empty string otherwise
-		if err != nil {
-			ip = ""
-		}
+	} else if err != nil {
+		ip = ""
 	}
 
-	// Build per-network IP map. For secondary NICs, best-effort resolution.
 	ipsByNet := make(map[string]string, len(networkNames))
 	if ip != "" {
 		ipsByNet[networkNames[0]] = ip
 	}
-	// Best-effort: resolve secondary NIC IPs (non-blocking, short timeout)
 	for i := 1; i < len(networkNames); i++ {
 		netName := networkNames[i]
 		nicMAC := macsByNet[netName]
@@ -255,14 +182,12 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		}
 	}
 
-	// Generate SSH command if we have an IP and matched keys
 	sshCommand := ""
-	username := "ubuntu" // default username
+	username := "ubuntu"
 	if len(ciConfig.Users) > 0 {
 		username = ciConfig.Users[0].Name
 	}
 	if ip != "" && username != "" && len(ciConfig.MatchedKeyNames) > 0 {
-		// Use the first matched key for the SSH command
 		firstKeyName := ciConfig.MatchedKeyNames[0]
 		if key, exists := p.keys[firstKeyName]; exists {
 			sshCommand = fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no %s@%s",
@@ -292,7 +217,62 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	return providerv1.SuccessResult(state)
 }
 
-// VMGet retrieves a VM by name.
+func requestedNetworkNames(spec *providerv1.VMSpec) ([]string, *providerv1.OperationError) {
+	if len(spec.Networks) > 0 {
+		return spec.Networks, nil
+	}
+	if spec.Network != "" {
+		return []string{spec.Network}, nil
+	}
+	return nil, providerv1.NewInvalidSpecError("VM requires at least one network (set network or networks)")
+}
+
+func networkInterfaces(networkNames []string, bootOrder []string) []NetworkInterface {
+	hasNetworkBoot := false
+	for _, dev := range bootOrder {
+		if dev == "network" {
+			hasNetworkBoot = true
+			break
+		}
+	}
+	nics := make([]NetworkInterface, len(networkNames))
+	for i, netName := range networkNames {
+		nics[i] = NetworkInterface{
+			Name:           netName,
+			HasNetworkBoot: hasNetworkBoot && i == 0,
+		}
+	}
+	return nics
+}
+
+func hasStrictReadiness(readiness *providerv1.ReadinessSpec) bool {
+	return readiness != nil && (readiness.SSH != nil || readiness.TCP != nil)
+}
+
+func declaredTCPAddress(readiness *providerv1.ReadinessSpec) string {
+	if readiness == nil || readiness.TCP == nil {
+		return ""
+	}
+	return readiness.TCP.Address
+}
+
+func (p *Provider) resolvePrimaryIP(req *providerv1.VMCreateRequest, dom domainHandle, networkName, mac string, budget time.Duration) (string, error) {
+	if ip := declaredTCPAddress(req.Spec.Readiness); ip != "" {
+		return ip, nil
+	}
+	if ip := extractStaticIP(req.Spec.CloudInit); ip != "" {
+		return ip, nil
+	}
+	ip, err := resolveIP(p.conn, networkName, mac, budget)
+	if err == nil && ip != "" {
+		return ip, nil
+	}
+	if arpIP := resolveIPFromARP(p.conn, dom); arpIP != "" {
+		return arpIP, nil
+	}
+	return "", err
+}
+
 func (p *Provider) VMGet(name string) *providerv1.OperationResult {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -305,7 +285,6 @@ func (p *Provider) VMGet(name string) *providerv1.OperationResult {
 	return providerv1.SuccessResult(vm)
 }
 
-// VMList lists all VMs.
 func (p *Provider) VMList(filter map[string]any) *providerv1.OperationResult {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -318,60 +297,33 @@ func (p *Provider) VMList(filter map[string]any) *providerv1.OperationResult {
 	return providerv1.SuccessResult(vms)
 }
 
-// VMDelete deletes a VM by name.
-// This function is idempotent: it will attempt to delete from libvirt even if
-// the VM is not in in-memory state (e.g., from a previous crashed run).
 func (p *Provider) VMDelete(name string) *providerv1.OperationResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	vm := p.vms[name]
-	deleted := false
 
-	// Always try to get domain from libvirt directly
-	// This handles cases where VM exists in libvirt but not in our state
-	// (e.g., provider restarted, previous run crashed)
 	dom, err := p.conn.DomainLookupByName(name)
 	if err == nil {
-		// Stop the domain (ignore error if already stopped)
 		_ = p.conn.DomainDestroy(dom)
-
-		// Undefine the domain (for persistent domains)
-		// Note: DomainCreateXML creates transient domains, so this may fail
 		_ = p.conn.DomainUndefine(dom)
-		deleted = true
 	}
 
-	// Clean up disk file if we have state
 	if vm != nil {
 		if diskPath, ok := vm.ProviderState["diskPath"].(string); ok {
 			_ = os.Remove(diskPath)
 		}
-
-		// Clean up cloud-init ISO
 		if isoPath, ok := vm.ProviderState["cloudInitISO"].(string); ok {
 			_ = os.Remove(isoPath)
 		}
 	}
 
-	// Also try to clean up files by convention if no state exists
-	// This handles cases where state was lost but files remain
 	if vm == nil {
-		diskPath := filepath.Join(p.config.StateDir, "disks", name+".qcow2")
-		_ = os.Remove(diskPath)
-
-		isoPath := filepath.Join(p.config.StateDir, "cloudinit", name+".iso")
-		_ = os.Remove(isoPath)
+		_ = os.Remove(filepath.Join(p.config.StateDir, "disks", name+".qcow2"))
+		_ = os.Remove(filepath.Join(p.config.StateDir, "cloudinit", name+".iso"))
 	}
 
 	delete(p.vms, name)
 
-	// Return success if we deleted anything or if nothing existed
-	// This makes delete idempotent
-	if deleted || vm != nil || err != nil {
-		return providerv1.SuccessResult(nil)
-	}
-
-	// If nothing was found anywhere, still return success (idempotent)
 	return providerv1.SuccessResult(nil)
 }

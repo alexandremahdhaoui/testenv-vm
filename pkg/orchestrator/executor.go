@@ -774,6 +774,7 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 	if spec.Readiness.Tcp.Port > 0 {
 		result.Readiness.TCP = &providerv1.TCPReadinessSpec{
 			Port:    spec.Readiness.Tcp.Port,
+			Address: spec.Readiness.Tcp.Address,
 			Timeout: spec.Readiness.Tcp.Timeout,
 		}
 	}

@@ -30,57 +30,40 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// CacheManager orchestrates image downloading and caching.
-// It handles concurrent access using file-based locking (flock) for cross-process
-// safety and a mutex for in-memory metadata access within a single process.
 type CacheManager struct {
-	// cacheDir is the root directory for the image cache.
-	cacheDir string
-	// downloader handles HTTP downloads.
+	cacheDir   string
 	downloader *Downloader
-	// metadata is the in-memory cache metadata.
-	metadata *CacheMetadata
-	// mu protects metadata access within a single process.
-	mu sync.Mutex
+	metadata   *CacheMetadata
+	mu         sync.Mutex
 }
 
-// CacheManagerOption is a functional option for configuring a CacheManager.
 type CacheManagerOption func(*CacheManager)
 
-// WithDownloader sets a custom Downloader for the CacheManager.
-// This is primarily used for testing with custom HTTP clients.
 func WithDownloader(d *Downloader) CacheManagerOption {
 	return func(m *CacheManager) {
 		m.downloader = d
 	}
 }
 
-// NewCacheManager creates a new CacheManager with the given cache directory.
-// It creates the cache directory and locks subdirectory if they don't exist,
-// and loads or initializes the metadata.json file.
 func NewCacheManager(cacheDir string, opts ...CacheManagerOption) (*CacheManager, error) {
 	m := &CacheManager{
 		cacheDir:   cacheDir,
 		downloader: NewDownloader(),
 	}
 
-	// Apply options
 	for _, opt := range opts {
 		opt(m)
 	}
 
-	// Create cache directory if not exists
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// Create locks directory
 	locksDir := filepath.Join(cacheDir, ".locks")
 	if err := os.MkdirAll(locksDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create locks directory: %w", err)
 	}
 
-	// Load or initialize metadata
 	if err := m.loadMetadata(); err != nil {
 		return nil, fmt.Errorf("failed to load metadata: %w", err)
 	}
@@ -88,14 +71,7 @@ func NewCacheManager(cacheDir string, opts ...CacheManagerOption) (*CacheManager
 	return m, nil
 }
 
-// EnsureImage ensures an image is available in the cache.
-// It resolves the source (well-known or direct URL), checks the cache,
-// and downloads the image if necessary. It uses file-based locking for
-// cross-process safety.
-//
-// Returns the ImageState with LocalPath set to the cached image file.
 func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.ImageSpec) (*ImageState, error) {
-	// Resolve source
 	source := spec.Source
 	var resolvedURL string
 	var expectedSHA256 string
@@ -103,14 +79,12 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 	wellKnown, isWellKnown := Resolve(source)
 	if isWellKnown {
 		resolvedURL = wellKnown.URL
-		// Use user-provided SHA256 if set, otherwise use registry's (which may be empty)
 		if spec.Sha256 != "" {
 			expectedSHA256 = spec.Sha256
 		} else {
 			expectedSHA256 = wellKnown.SHA256
 		}
 	} else {
-		// Direct URL - validate HTTPS
 		if !strings.HasPrefix(source, "https://") {
 			return nil, fmt.Errorf("direct URL must use HTTPS: %s", source)
 		}
@@ -118,10 +92,8 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		expectedSHA256 = spec.Sha256
 	}
 
-	// Compute cache key from source (and customize spec if present)
 	key := m.cacheKeyWithCustomize(source, spec.Customize)
 
-	// Acquire file-based lock for cross-process safety
 	lockFile, err := m.acquireFileLock(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire lock: %w", err)
@@ -130,135 +102,37 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		_ = m.releaseFileLock(lockFile)
 	}()
 
-	// Check cache (re-check after acquiring lock)
 	m.mu.Lock()
 	existing, found := m.metadata.Images[key]
 	m.mu.Unlock()
 
 	if found && existing.Status == StatusReady {
-		// Verify file still exists
 		if _, err := os.Stat(existing.LocalPath); err == nil {
-			// Verify checksum if we have one
 			if expectedSHA256 != "" {
 				if err := m.downloader.VerifyChecksum(existing.verifiedPath(), expectedSHA256); err == nil {
-					// Cache hit - return existing state
 					return existing, nil
 				}
-				// Checksum mismatch - need to re-download
 			} else {
-				// No checksum to verify - trust existing file
 				return existing, nil
 			}
 		}
-		// File missing or corrupted - fall through to download
 	}
 
-	// Customize flow: build a pre-customized qcow2 overlay from a base image.
 	if spec.Customize != nil && (len(spec.Customize.Packages) > 0 || len(spec.Customize.Runcmd) > 0) {
-		// Check virt-customize availability
-		if err := checkVirtCustomize(); err != nil {
-			return nil, err
-		}
-
-		// Ensure base image (recursive call with no customize).
-		// Uses a different cache key (cacheKey(source) vs cacheKeyWithCustomize),
-		// so it acquires a different lock file. No deadlock risk.
-		baseSpec := v1.ImageSpec{Source: spec.Source, Sha256: spec.Sha256}
-		baseState, err := m.EnsureImage(ctx, name+"-base", baseSpec)
-		if err != nil {
-			return nil, fmt.Errorf("ensuring base image for customization: %w", err)
-		}
-
-		// Create image directory
-		imageDir := m.imageDirName(name)
-		if err := os.MkdirAll(imageDir, 0o755); err != nil {
-			return nil, fmt.Errorf("creating image directory: %w", err)
-		}
-
-		localPath := filepath.Join(imageDir, name+".qcow2")
-
-		// Update metadata to customizing
-		m.mu.Lock()
-		m.metadata.Images[key] = &ImageState{
-			Name:      name,
-			Source:    source,
-			LocalPath: localPath,
-			Status:    StatusCustomizing,
-		}
-		if err := m.saveMetadata(); err != nil {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("saving metadata: %w", err)
-		}
-		m.mu.Unlock()
-
-		// Create qcow2 overlay backed by base image
-		if err := createQcow2Overlay(baseState.LocalPath, localPath); err != nil {
-			cleanupPartialImage(localPath)
-			m.mu.Lock()
-			m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}
-			_ = m.saveMetadata()
-			m.mu.Unlock()
-			return nil, fmt.Errorf("creating overlay: %w", err)
-		}
-
-		// Run virt-customize
-		if err := runVirtCustomize(ctx, localPath, spec.Customize); err != nil {
-			cleanupPartialImage(localPath)
-			m.mu.Lock()
-			m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}
-			_ = m.saveMetadata()
-			m.mu.Unlock()
-			return nil, fmt.Errorf("customizing image: %w", err)
-		}
-
-		// Compute checksum and file info
-		checksum, err := m.computeChecksum(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("computing checksum: %w", err)
-		}
-
-		fileInfo, err := os.Stat(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("stat image: %w", err)
-		}
-
-		// Update metadata to ready
-		state := &ImageState{
-			Name:         name,
-			Source:       source,
-			LocalPath:    localPath,
-			SHA256:       checksum,
-			Size:         fileInfo.Size(),
-			DownloadedAt: time.Now(),
-			Status:       StatusReady,
-		}
-
-		m.mu.Lock()
-		m.metadata.Images[key] = state
-		m.metadata.UpdatedAt = time.Now()
-		if err := m.saveMetadata(); err != nil {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("saving metadata: %w", err)
-		}
-		m.mu.Unlock()
-
-		return state, nil
+		return m.ensureCustomizedImage(ctx, name, spec, key)
 	}
 
-	// Cache miss or corrupted - need to download
 	imageDir := m.imageDirName(name)
 	if err := os.MkdirAll(imageDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create image directory: %w", err)
 	}
 
-	// Determine filename from URL
 	filename := filepath.Base(resolvedURL)
 	if filename == "" || filename == "." || filename == "/" {
 		filename = "image"
 	}
 	localPath := filepath.Join(imageDir, filename)
 
-	// Update metadata to "downloading" status
 	m.mu.Lock()
 	m.metadata.Images[key] = &ImageState{
 		Name:        name,
@@ -273,31 +147,19 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 	}
 	m.mu.Unlock()
 
-	// Download the image
 	if err := m.downloader.Download(ctx, resolvedURL, localPath); err != nil {
-		// Update metadata to failed status
-		m.mu.Lock()
-		m.metadata.Images[key].Status = StatusFailed
-		_ = m.saveMetadata()
-		m.mu.Unlock()
+		m.markFailed(key)
 		return nil, fmt.Errorf("failed to download image: %w", err)
 	}
 
-	// Verify checksum if provided
 	if expectedSHA256 != "" {
 		if err := m.downloader.VerifyChecksum(localPath, expectedSHA256); err != nil {
-			// Remove corrupted file
 			_ = os.Remove(localPath)
-			// Update metadata to failed status
-			m.mu.Lock()
-			m.metadata.Images[key].Status = StatusFailed
-			_ = m.saveMetadata()
-			m.mu.Unlock()
+			m.markFailed(key)
 			return nil, fmt.Errorf("checksum verification failed: %w", err)
 		}
 	}
 
-	// Compute actual checksum
 	actualSHA256, err := m.computeChecksum(localPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute checksum: %w", err)
@@ -309,10 +171,7 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		localPath = strings.TrimSuffix(localPath, ".gz")
 		if err := decompressGzip(compressedPath, localPath); err != nil {
 			_ = os.Remove(localPath)
-			m.mu.Lock()
-			m.metadata.Images[key].Status = StatusFailed
-			_ = m.saveMetadata()
-			m.mu.Unlock()
+			m.markFailed(key)
 			return nil, fmt.Errorf("decompressing image %s: %w", compressedPath, err)
 		}
 	}
@@ -322,8 +181,6 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		return nil, fmt.Errorf("failed to stat downloaded file: %w", err)
 	}
 
-	// Update metadata with success
-	m.mu.Lock()
 	state := &ImageState{
 		Name:           name,
 		Source:         source,
@@ -335,25 +192,113 @@ func (m *CacheManager) EnsureImage(ctx context.Context, name string, spec v1.Ima
 		DownloadedAt:   time.Now(),
 		Status:         StatusReady,
 	}
-	m.metadata.Images[key] = state
-	m.metadata.UpdatedAt = time.Now()
-	if err := m.saveMetadata(); err != nil {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("failed to save metadata: %w", err)
+	if err := m.storeReady(key, state); err != nil {
+		return nil, err
 	}
-	m.mu.Unlock()
 
 	return state, nil
 }
 
-// GetImagePath returns the local path for an already-ensured image.
-// It performs a quick lookup in the in-memory metadata without locking.
-// Returns the path and true if found, or empty string and false if not found.
+func (m *CacheManager) ensureCustomizedImage(ctx context.Context, name string, spec v1.ImageSpec, key string) (*ImageState, error) {
+	if err := checkVirtCustomize(); err != nil {
+		return nil, err
+	}
+
+	baseSpec := v1.ImageSpec{Source: spec.Source, Sha256: spec.Sha256}
+	baseState, err := m.EnsureImage(ctx, name+"-base", baseSpec)
+	if err != nil {
+		return nil, fmt.Errorf("ensuring base image for customization: %w", err)
+	}
+
+	imageDir := m.imageDirName(name)
+	if err := os.MkdirAll(imageDir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating image directory: %w", err)
+	}
+
+	localPath := filepath.Join(imageDir, name+".qcow2")
+
+	m.mu.Lock()
+	m.metadata.Images[key] = &ImageState{
+		Name:      name,
+		Source:    spec.Source,
+		LocalPath: localPath,
+		Status:    StatusCustomizing,
+	}
+	if err := m.saveMetadata(); err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("saving metadata: %w", err)
+	}
+	m.mu.Unlock()
+
+	if err := createQcow2Overlay(baseState.LocalPath, localPath); err != nil {
+		cleanupPartialImage(localPath)
+		m.markFailedNamed(key, name, spec.Source)
+		return nil, fmt.Errorf("creating overlay: %w", err)
+	}
+
+	if err := runVirtCustomize(ctx, localPath, spec.Customize); err != nil {
+		cleanupPartialImage(localPath)
+		m.markFailedNamed(key, name, spec.Source)
+		return nil, fmt.Errorf("customizing image: %w", err)
+	}
+
+	checksum, err := m.computeChecksum(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("computing checksum: %w", err)
+	}
+
+	fileInfo, err := os.Stat(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat image: %w", err)
+	}
+
+	state := &ImageState{
+		Name:         name,
+		Source:       spec.Source,
+		LocalPath:    localPath,
+		SHA256:       checksum,
+		Size:         fileInfo.Size(),
+		DownloadedAt: time.Now(),
+		Status:       StatusReady,
+	}
+	if err := m.storeReady(key, state); err != nil {
+		return nil, err
+	}
+
+	return state, nil
+}
+
+func (m *CacheManager) markFailed(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if state, ok := m.metadata.Images[key]; ok {
+		state.Status = StatusFailed
+	}
+	_ = m.saveMetadata()
+}
+
+func (m *CacheManager) markFailedNamed(key, name, source string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metadata.Images[key] = &ImageState{Name: name, Source: source, Status: StatusFailed}
+	_ = m.saveMetadata()
+}
+
+func (m *CacheManager) storeReady(key string, state *ImageState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.metadata.Images[key] = state
+	m.metadata.UpdatedAt = time.Now()
+	if err := m.saveMetadata(); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
+	}
+	return nil
+}
+
 func (m *CacheManager) GetImagePath(name string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Search through all images for one with matching name
 	for _, img := range m.metadata.Images {
 		if img.Name == name && img.Status == StatusReady {
 			return img.LocalPath, true
@@ -362,14 +307,12 @@ func (m *CacheManager) GetImagePath(name string) (string, bool) {
 	return "", false
 }
 
-// loadMetadata loads metadata from metadata.json or initializes it if not found.
 func (m *CacheManager) loadMetadata() error {
 	metadataPath := filepath.Join(m.cacheDir, "metadata.json")
 
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Initialize new metadata
 			m.metadata = &CacheMetadata{
 				Version:   MetadataVersion,
 				Images:    make(map[string]*ImageState),
@@ -385,7 +328,6 @@ func (m *CacheManager) loadMetadata() error {
 		return fmt.Errorf("failed to parse metadata file: %w", err)
 	}
 
-	// Ensure Images map is initialized
 	if metadata.Images == nil {
 		metadata.Images = make(map[string]*ImageState)
 	}
@@ -394,8 +336,6 @@ func (m *CacheManager) loadMetadata() error {
 	return nil
 }
 
-// saveMetadata writes metadata to metadata.json.
-// Caller must hold m.mu lock.
 func (m *CacheManager) saveMetadata() error {
 	metadataPath := filepath.Join(m.cacheDir, "metadata.json")
 
@@ -404,7 +344,6 @@ func (m *CacheManager) saveMetadata() error {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	// Write atomically via temp file
 	tmpPath := metadataPath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return fmt.Errorf("failed to write metadata file: %w", err)
@@ -418,18 +357,14 @@ func (m *CacheManager) saveMetadata() error {
 	return nil
 }
 
-// acquireFileLock acquires an exclusive file lock for the given cache key.
-// Returns the locked file handle which must be released via releaseFileLock.
 func (m *CacheManager) acquireFileLock(key string) (*os.File, error) {
 	lockPath := filepath.Join(m.cacheDir, ".locks", key+".lock")
 
-	// Create or open lock file
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open lock file: %w", err)
 	}
 
-	// Acquire exclusive lock (blocking)
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("failed to acquire flock: %w", err)
@@ -438,13 +373,11 @@ func (m *CacheManager) acquireFileLock(key string) (*os.File, error) {
 	return f, nil
 }
 
-// releaseFileLock releases a file lock and closes the file.
 func (m *CacheManager) releaseFileLock(f *os.File) error {
 	if f == nil {
 		return nil
 	}
 
-	// Release lock
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_UN); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("failed to release flock: %w", err)
@@ -453,17 +386,11 @@ func (m *CacheManager) releaseFileLock(f *os.File) error {
 	return f.Close()
 }
 
-// cacheKey computes a consistent cache key from a source string.
-// The key is the SHA256 hash of the source, ensuring consistent lookups
-// regardless of how the source is formatted.
 func (m *CacheManager) cacheKey(source string) string {
 	h := sha256.Sum256([]byte(source))
 	return hex.EncodeToString(h[:])
 }
 
-// cacheKeyWithCustomize computes a cache key that incorporates both the source
-// and the customization spec. If customize is nil, falls back to the base cacheKey.
-// json.Marshal of a Go struct is deterministic (fields in declaration order).
 func (m *CacheManager) cacheKeyWithCustomize(source string, customize *v1.ImageCustomizeSpec) string {
 	if customize == nil || (len(customize.Packages) == 0 && len(customize.Runcmd) == 0) {
 		return m.cacheKey(source)
@@ -474,13 +401,10 @@ func (m *CacheManager) cacheKeyWithCustomize(source string, customize *v1.ImageC
 	return hex.EncodeToString(h[:])
 }
 
-// imageDirName returns the directory path for storing image files.
-// The directory is named after the image name for human readability.
 func (m *CacheManager) imageDirName(name string) string {
 	return filepath.Join(m.cacheDir, name)
 }
 
-// computeChecksum computes the SHA256 checksum of a file.
 func (m *CacheManager) computeChecksum(filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -496,11 +420,7 @@ func (m *CacheManager) computeChecksum(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// copyWithContext copies from src to dst, respecting context cancellation.
-// This is a simple wrapper around io.Copy for now, but can be extended
-// to support progress reporting and cancellation.
 func copyWithContext(ctx context.Context, dst interface{ Write([]byte) (int, error) }, src interface{ Read([]byte) (int, error) }) (int64, error) {
-	// Simple implementation - just use a buffer-based copy
 	buf := make([]byte, 32*1024)
 	var written int64
 	for {

@@ -26,9 +26,6 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// waitForReadiness performs readiness checks on a VM after it has been started.
-// It checks SSH connectivity and cloud-init completion based on the readiness spec.
-// Returns nil if all enabled checks pass, or an OperationError on failure.
 func waitForReadiness(spec *providerv1.ReadinessSpec, ip string) *providerv1.OperationError {
 	if spec == nil {
 		return nil
@@ -38,25 +35,13 @@ func waitForReadiness(spec *providerv1.ReadinessSpec, ip string) *providerv1.Ope
 		return providerv1.NewProviderError("readiness check failed: VM has no IP address", true)
 	}
 
-	log.Printf("Readiness check for %s: SSH=%v CloudInit=%v keyPath=%q user=%q",
+	log.Printf("Readiness check for %s: SSH=%v CloudInit=%v TCP=%v",
 		ip,
 		spec.SSH != nil && spec.SSH.Enabled,
 		spec.CloudInit != nil && spec.CloudInit.Enabled,
-		func() string {
-			if spec.SSH != nil {
-				return spec.SSH.PrivateKey
-			}
-			return ""
-		}(),
-		func() string {
-			if spec.SSH != nil {
-				return spec.SSH.User
-			}
-			return ""
-		}(),
+		spec.TCP != nil && spec.TCP.Port > 0,
 	)
 
-	// Build SSH config once and reuse for both phases.
 	var sshConfig *ssh.ClientConfig
 	var fingerprint string
 	if spec.SSH != nil && spec.SSH.Enabled {
@@ -69,37 +54,14 @@ func waitForReadiness(spec *providerv1.ReadinessSpec, ip string) *providerv1.Ope
 		log.Printf("Built SSH config: user=%s keyPath=%s fingerprint=%s", spec.SSH.User, spec.SSH.PrivateKey, fingerprint)
 	}
 
-	// Phase 1: SSH readiness
 	if spec.SSH != nil && spec.SSH.Enabled {
 		if err := waitForSSH(sshConfig, spec.SSH, ip); err != nil {
 			return err
 		}
 		log.Printf("SSH readiness check passed for %s (fingerprint=%s)", ip, fingerprint)
-
-		// Immediately verify auth still works before entering cloud-init phase.
-		addr := net.JoinHostPort(ip, "22")
-		verifyConn, dialErr := ssh.Dial("tcp", addr, sshConfig)
-		if dialErr != nil {
-			log.Printf("WARNING: SSH verification dial failed immediately after waitForSSH for %s: %v", ip, dialErr)
-		} else {
-			session, sessErr := verifyConn.NewSession()
-			if sessErr != nil {
-				log.Printf("WARNING: SSH verification session failed for %s: %v", ip, sessErr)
-			} else {
-				var out bytes.Buffer
-				session.Stdout = &out
-				if runErr := session.Run("whoami"); runErr != nil {
-					log.Printf("WARNING: SSH verification whoami failed for %s: %v", ip, runErr)
-				} else {
-					log.Printf("SSH verification whoami=%q for %s", out.String(), ip)
-				}
-				_ = session.Close()
-			}
-			_ = verifyConn.Close()
-		}
+		verifySSHSession(sshConfig, ip)
 	}
 
-	// Phase 2: Cloud-init readiness (requires SSH)
 	if spec.CloudInit != nil && spec.CloudInit.Enabled {
 		if spec.SSH == nil || !spec.SSH.Enabled {
 			return providerv1.NewInvalidSpecError("cloud-init readiness check requires SSH readiness to be enabled")
@@ -118,9 +80,39 @@ func waitForReadiness(spec *providerv1.ReadinessSpec, ip string) *providerv1.Ope
 	return nil
 }
 
+func verifySSHSession(sshConfig *ssh.ClientConfig, ip string) {
+	addr := net.JoinHostPort(ip, "22")
+	verifyConn, dialErr := ssh.Dial("tcp", addr, sshConfig)
+	if dialErr != nil {
+		log.Printf("WARNING: SSH verification dial failed immediately after waitForSSH for %s: %v", ip, dialErr)
+		return
+	}
+	defer func() { _ = verifyConn.Close() }()
+	session, sessErr := verifyConn.NewSession()
+	if sessErr != nil {
+		log.Printf("WARNING: SSH verification session failed for %s: %v", ip, sessErr)
+		return
+	}
+	defer func() { _ = session.Close() }()
+	var out bytes.Buffer
+	session.Stdout = &out
+	if runErr := session.Run("whoami"); runErr != nil {
+		log.Printf("WARNING: SSH verification whoami failed for %s: %v", ip, runErr)
+		return
+	}
+	log.Printf("SSH verification whoami=%q for %s", out.String(), ip)
+}
+
 func waitForTCP(spec *providerv1.TCPReadinessSpec, ip string) *providerv1.OperationError {
-	timeout := readinessTimeout(spec.Timeout, 3*time.Minute)
-	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", spec.Port))
+	timeout, specErr := readinessTimeout("tcp", spec.Timeout, 3*time.Minute)
+	if specErr != nil {
+		return specErr
+	}
+	host := ip
+	if spec.Address != "" {
+		host = spec.Address
+	}
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", spec.Port))
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
@@ -134,18 +126,30 @@ func waitForTCP(spec *providerv1.TCPReadinessSpec, ip string) *providerv1.Operat
 	return providerv1.NewTimeoutError(fmt.Sprintf("tcp readiness on %s after %s", addr, timeout))
 }
 
-func readinessTimeout(declared string, fallback time.Duration) time.Duration {
+func readinessTimeout(check, declared string, fallback time.Duration) (time.Duration, *providerv1.OperationError) {
 	if declared == "" {
-		return fallback
+		return fallback, nil
 	}
 	parsed, err := time.ParseDuration(declared)
 	if err != nil {
-		return fallback
+		return 0, providerv1.NewInvalidSpecError(fmt.Sprintf("invalid %s readiness timeout %q: %v", check, declared, err))
 	}
-	return parsed
+	return parsed, nil
 }
 
-// waitForSSH polls for SSH connectivity until the timeout is reached.
+func ipResolutionBudget(readiness *providerv1.ReadinessSpec) (time.Duration, *providerv1.OperationError) {
+	if readiness == nil {
+		return 60 * time.Second, nil
+	}
+	if readiness.SSH != nil {
+		return readinessTimeout("SSH", readiness.SSH.Timeout, 3*time.Minute)
+	}
+	if readiness.TCP != nil {
+		return readinessTimeout("tcp", readiness.TCP.Timeout, 3*time.Minute)
+	}
+	return 60 * time.Second, nil
+}
+
 func waitForSSH(sshConfig *ssh.ClientConfig, spec *providerv1.SSHReadinessSpec, ip string) *providerv1.OperationError {
 	timeout, err := time.ParseDuration(spec.Timeout)
 	if err != nil {
@@ -162,7 +166,6 @@ func waitForSSH(sshConfig *ssh.ClientConfig, spec *providerv1.SSHReadinessSpec, 
 		attempt++
 		conn, dialErr := ssh.Dial("tcp", addr, sshConfig)
 		if dialErr == nil {
-			// Verify auth by running a command.
 			session, sessErr := conn.NewSession()
 			if sessErr != nil {
 				log.Printf("SSH check attempt %d: dial OK but session failed for %s: %v", attempt, ip, sessErr)
@@ -198,7 +201,6 @@ func waitForSSH(sshConfig *ssh.ClientConfig, spec *providerv1.SSHReadinessSpec, 
 	)
 }
 
-// waitForCloudInit waits for cloud-init to finish by running a command over SSH.
 func waitForCloudInit(sshConfig *ssh.ClientConfig, fingerprint string, ciSpec *providerv1.CloudInitReadinessSpec, sshSpec *providerv1.SSHReadinessSpec, ip string) *providerv1.OperationError {
 	timeout, err := time.ParseDuration(ciSpec.Timeout)
 	if err != nil {
@@ -211,9 +213,6 @@ func waitForCloudInit(sshConfig *ssh.ClientConfig, fingerprint string, ciSpec *p
 	deadline := time.Now().Add(timeout)
 	pollInterval := 10 * time.Second
 
-	// cloud-init status --wait blocks until completion, but we add a timeout
-	// wrapper to prevent indefinite hangs, plus a fallback check for the
-	// boot-finished file. Consistent with pkg/client/client.go WaitReady().
 	cmd := "timeout 60 cloud-init status --wait || test -f /var/lib/cloud/instance/boot-finished"
 
 	var lastErr error
@@ -260,8 +259,6 @@ func waitForCloudInit(sshConfig *ssh.ClientConfig, fingerprint string, ciSpec *p
 	)
 }
 
-// buildSSHClientConfig builds an ssh.ClientConfig from an SSHReadinessSpec.
-// Returns the config, the key fingerprint, and an optional error.
 func buildSSHClientConfig(spec *providerv1.SSHReadinessSpec) (*ssh.ClientConfig, string, *providerv1.OperationError) {
 	if spec.PrivateKey == "" {
 		return nil, "", providerv1.NewInvalidSpecError("SSH readiness check requires a private key path")

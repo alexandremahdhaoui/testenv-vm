@@ -23,7 +23,6 @@ import (
 	"text/template"
 )
 
-// NetworkConfig holds configuration for generating network XML.
 type NetworkConfig struct {
 	Name        string
 	BridgeName  string
@@ -34,15 +33,11 @@ type NetworkConfig struct {
 	DHCPEnd     string
 }
 
-// NetworkInterface describes a single NIC to attach to a domain.
 type NetworkInterface struct {
-	// Name is the libvirt network name.
-	Name string
-	// HasNetworkBoot enables PXE ROM on this interface.
+	Name           string
 	HasNetworkBoot bool
 }
 
-// DomainConfig holds configuration for generating domain XML.
 type DomainConfig struct {
 	Name         string
 	MemoryMB     int
@@ -50,60 +45,47 @@ type DomainConfig struct {
 	DiskPath     string
 	CloudInitISO string
 	CdromPath    string
-	Networks     []NetworkInterface // One or more NICs to attach.
-	BootOrder    []string           // Boot device order: "network", "hd", "cdrom"
-	Firmware     string             // "bios" or "uefi"
+	Networks     []NetworkInterface
+	BootOrder    []string
+	Firmware     string
 }
 
-// generateBridgeName generates a unique bridge name from the network name.
-// The bridge name is limited to 15 characters (Linux limit).
 func generateBridgeName(networkName string) string {
 	hash := sha256.Sum256([]byte(networkName))
 	hashStr := hex.EncodeToString(hash[:])
-	// virbr- (6) + 8 chars = 14, within 15 char limit
 	return "virbr-" + hashStr[:8]
 }
 
-// parseCIDR parses a CIDR string and returns gateway, netmask, and DHCP range.
 func parseCIDR(cidr string) (gateway, netmask, dhcpStart, dhcpEnd string, err error) {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("invalid CIDR: %w", err)
 	}
 
-	// Use the network address, not the provided IP
 	networkIP := ipNet.IP
 
-	// Calculate gateway (first usable IP: x.x.x.1)
 	gatewayIP := make(net.IP, len(networkIP))
 	copy(gatewayIP, networkIP)
 	gatewayIP[len(gatewayIP)-1] = 1
 	gateway = gatewayIP.String()
 
-	// Convert mask to dotted decimal
 	mask := ipNet.Mask
 	netmask = fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
 
-	// Calculate DHCP range
-	// Start: x.x.x.2
 	dhcpStartIP := make(net.IP, len(networkIP))
 	copy(dhcpStartIP, networkIP)
 	dhcpStartIP[len(dhcpStartIP)-1] = 2
 	dhcpStart = dhcpStartIP.String()
 
-	// End: broadcast - 1 (e.g., x.x.x.254 for /24)
-	// Calculate broadcast address
 	broadcast := make(net.IP, len(networkIP))
 	for i := range broadcast {
 		broadcast[i] = networkIP[i] | ^mask[i]
 	}
-	// End is broadcast - 1
 	dhcpEndIP := make(net.IP, len(broadcast))
 	copy(dhcpEndIP, broadcast)
 	dhcpEndIP[len(dhcpEndIP)-1]--
 	dhcpEnd = dhcpEndIP.String()
 
-	// Validate that we didn't mess up (the original IP should be in the network)
 	if !ipNet.Contains(ip) {
 		return "", "", "", "", fmt.Errorf("IP %s not in network %s", ip, ipNet)
 	}
@@ -129,7 +111,6 @@ func resolveGateway(cidr, defaultGateway, declaredGateway string) (string, error
 	return declaredGateway, nil
 }
 
-// Network XML templates
 const natNetworkTemplate = `<network>
     <name>{{.Name}}</name>
     <bridge name='{{.BridgeName}}'/>
@@ -165,22 +146,18 @@ const bridgeNetworkTemplate = `<network>
     <bridge name='{{.BridgeName}}'/>
 </network>`
 
-// generateNATNetworkXML generates XML for a NAT network.
 func generateNATNetworkXML(config NetworkConfig) (string, error) {
 	return executeTemplate(natNetworkTemplate, config)
 }
 
-// generateIsolatedNetworkXML generates XML for an isolated network.
 func generateIsolatedNetworkXML(config NetworkConfig) (string, error) {
 	return executeTemplate(isolatedNetworkTemplate, config)
 }
 
-// generateBridgeNetworkXML generates XML for a bridge network.
 func generateBridgeNetworkXML(config NetworkConfig) (string, error) {
 	return executeTemplate(bridgeNetworkTemplate, config)
 }
 
-// Domain XML template
 const domainTemplate = `<domain type='kvm'>
     <name>{{.Name}}</name>
     <memory unit='MiB'>{{.MemoryMB}}</memory>
@@ -200,7 +177,6 @@ const domainTemplate = `<domain type='kvm'>
     </features>
     <cpu mode='host-passthrough'/>
     <devices>
-        <!-- Main disk -->
         <disk type='file' device='disk'>
             <driver name='qemu' type='qcow2'/>
             <source file='{{.DiskPath}}'/>
@@ -215,7 +191,6 @@ const domainTemplate = `<domain type='kvm'>
         </disk>
 {{end}}
 {{if .CloudInitISO}}
-        <!-- Cloud-init ISO -->
         <disk type='file' device='cdrom'>
             <driver name='qemu' type='raw'/>
             <source file='{{.CloudInitISO}}'/>
@@ -223,7 +198,6 @@ const domainTemplate = `<domain type='kvm'>
             <readonly/>
         </disk>
 {{end}}
-        <!-- Network interfaces -->
 {{- range .Networks}}
         <interface type='network'>
             <source network='{{.Name}}'/>
@@ -233,8 +207,6 @@ const domainTemplate = `<domain type='kvm'>
 {{- end}}
         </interface>
 {{- end}}
-
-        <!-- Serial console -->
         <serial type='pty'>
             <target port='0'/>
         </serial>
@@ -244,9 +216,7 @@ const domainTemplate = `<domain type='kvm'>
     </devices>
 </domain>`
 
-// generateDomainXML generates XML for a domain (VM).
 func generateDomainXML(config DomainConfig) (string, error) {
-	// Apply defaults
 	if config.MemoryMB == 0 {
 		config.MemoryMB = 2048
 	}
@@ -257,7 +227,6 @@ func generateDomainXML(config DomainConfig) (string, error) {
 	return executeTemplate(domainTemplate, config)
 }
 
-// executeTemplate executes a template with the given data.
 func executeTemplate(tmpl string, data interface{}) (string, error) {
 	t, err := template.New("xml").Parse(tmpl)
 	if err != nil {
