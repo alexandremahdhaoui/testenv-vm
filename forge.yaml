@@ -48,6 +48,9 @@ test:
   - name: e2e_libvirt_delete
     runner: forge://go-test
 
+  - name: e2e_boot
+    runner: forge://go-test
+
 factory:
   module: github.com/alexandremahdhaoui/testenv-vm
   goVersion: "1.26.5"
