@@ -163,7 +163,7 @@ func RenderSpec(spec interface{}, ctx *TemplateContext) error {
 // renderValue recursively renders string fields in a reflect.Value.
 func renderValue(v reflect.Value, ctx *TemplateContext) error {
 	// Handle pointers
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return nil
 		}
@@ -310,7 +310,7 @@ func ExtractTemplateRefs(spec interface{}) []v1.ResourceRef {
 // extractFromValue recursively extracts template references from a reflect.Value.
 func extractFromValue(v reflect.Value, refs *[]v1.ResourceRef, seen map[string]bool) {
 	// Handle pointers
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return
 		}

@@ -58,24 +58,24 @@ func generateUserData(config *CloudInitConfig) string {
 	if len(config.Users) > 0 {
 		sb.WriteString("users:\n")
 		for _, user := range config.Users {
-			sb.WriteString(fmt.Sprintf("  - name: %s\n", user.Name))
+			fmt.Fprintf(&sb, "  - name: %s\n", user.Name)
 			// Sudo (default: ALL=(ALL) NOPASSWD:ALL)
 			sudo := user.Sudo
 			if sudo == "" {
 				sudo = "ALL=(ALL) NOPASSWD:ALL"
 			}
-			sb.WriteString(fmt.Sprintf("    sudo: ['%s']\n", sudo))
+			fmt.Fprintf(&sb, "    sudo: ['%s']\n", sudo)
 			// Shell (default: /bin/bash)
 			shell := user.Shell
 			if shell == "" {
 				shell = "/bin/bash"
 			}
-			sb.WriteString(fmt.Sprintf("    shell: %s\n", shell))
+			fmt.Fprintf(&sb, "    shell: %s\n", shell)
 			// SSH authorized keys
 			if len(user.SSHAuthorizedKeys) > 0 {
 				sb.WriteString("    ssh-authorized-keys:\n")
 				for _, key := range user.SSHAuthorizedKeys {
-					sb.WriteString(fmt.Sprintf("      - %s\n", strings.TrimSpace(key)))
+					fmt.Fprintf(&sb, "      - %s\n", strings.TrimSpace(key))
 				}
 			}
 		}
@@ -91,7 +91,7 @@ func generateUserData(config *CloudInitConfig) string {
 	if len(config.Packages) > 0 {
 		sb.WriteString("\npackages:\n")
 		for _, pkg := range config.Packages {
-			sb.WriteString(fmt.Sprintf("  - %s\n", pkg))
+			fmt.Fprintf(&sb, "  - %s\n", pkg)
 		}
 	}
 
@@ -99,14 +99,14 @@ func generateUserData(config *CloudInitConfig) string {
 	if len(config.WriteFiles) > 0 {
 		sb.WriteString("\nwrite_files:\n")
 		for _, wf := range config.WriteFiles {
-			sb.WriteString(fmt.Sprintf("  - path: %s\n", wf.Path))
+			fmt.Fprintf(&sb, "  - path: %s\n", wf.Path)
 			sb.WriteString("    content: |\n")
 			// Indent each line of content by 6 spaces
 			for _, line := range strings.Split(wf.Content, "\n") {
-				sb.WriteString(fmt.Sprintf("      %s\n", line))
+				fmt.Fprintf(&sb, "      %s\n", line)
 			}
 			if wf.Permissions != "" {
-				sb.WriteString(fmt.Sprintf("    permissions: '%s'\n", wf.Permissions))
+				fmt.Fprintf(&sb, "    permissions: '%s'\n", wf.Permissions)
 			}
 		}
 	}
@@ -118,10 +118,10 @@ func generateUserData(config *CloudInitConfig) string {
 			// Multiline commands need YAML literal block scalar syntax
 			sb.WriteString("  - |\n")
 			for _, line := range strings.Split(strings.TrimRight(cmd, "\n"), "\n") {
-				sb.WriteString(fmt.Sprintf("    %s\n", line))
+				fmt.Fprintf(&sb, "    %s\n", line)
 			}
 		} else {
-			sb.WriteString(fmt.Sprintf("  - %s\n", cmd))
+			fmt.Fprintf(&sb, "  - %s\n", cmd)
 		}
 	}
 	sb.WriteString("  - touch /var/lib/cloud/instance/boot-finished\n")
@@ -165,12 +165,12 @@ ethernets:
 
 		if hasWildcard {
 			// Use match syntax for wildcard patterns
-			sb.WriteString(fmt.Sprintf("  %s:\n", sanitizeInterfaceName(ifaceName)))
+			fmt.Fprintf(&sb, "  %s:\n", sanitizeInterfaceName(ifaceName))
 			sb.WriteString("    match:\n")
-			sb.WriteString(fmt.Sprintf("      name: \"%s\"\n", ifaceName))
+			fmt.Fprintf(&sb, "      name: \"%s\"\n", ifaceName)
 		} else {
 			// Direct interface name
-			sb.WriteString(fmt.Sprintf("  %s:\n", ifaceName))
+			fmt.Fprintf(&sb, "  %s:\n", ifaceName)
 		}
 
 		// DHCP or static
@@ -180,14 +180,14 @@ ethernets:
 			sb.WriteString("    dhcp4: false\n")
 			sb.WriteString("    addresses:\n")
 			for _, addr := range eth.Addresses {
-				sb.WriteString(fmt.Sprintf("      - %s\n", addr))
+				fmt.Fprintf(&sb, "      - %s\n", addr)
 			}
 
 			// Routes/gateway
 			if eth.Gateway4 != "" {
 				sb.WriteString("    routes:\n")
 				sb.WriteString("      - to: default\n")
-				sb.WriteString(fmt.Sprintf("        via: %s\n", eth.Gateway4))
+				fmt.Fprintf(&sb, "        via: %s\n", eth.Gateway4)
 			}
 
 			// Nameservers
@@ -195,7 +195,7 @@ ethernets:
 				sb.WriteString("    nameservers:\n")
 				sb.WriteString("      addresses:\n")
 				for _, ns := range eth.Nameservers.Addresses {
-					sb.WriteString(fmt.Sprintf("        - %s\n", ns))
+					fmt.Fprintf(&sb, "        - %s\n", ns)
 				}
 			}
 		} else {
