@@ -19,7 +19,7 @@ It manages 3 resource types (keys, networks, VMs), supports 3 network kinds (bri
 
 ```bash
 # Install forge
-go install github.com/alexandremahdhaoui/forge/cmd/forge@latest
+go install github.com/alexandremahdhaoui/forge/cmd/forge@v0.46.0
 ```
 
 ```yaml
@@ -28,7 +28,7 @@ engines:
   - alias: e2e-testenv
     type: testenv
     testenv:
-      - engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm
+      - engine: forge://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm
         spec:
           providers:
             - name: libvirt
@@ -54,7 +54,7 @@ engines:
 
 ```bash
 # Run tests with VM infrastructure
-forge test e2e
+forge test run e2e
 ```
 
 ## How does it work?

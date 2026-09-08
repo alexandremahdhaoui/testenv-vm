@@ -1,6 +1,6 @@
 # testenv-vm Configuration
 
-
+Provisions SSH keys, networks and virtual machines through a provider such as libvirt, waits for readiness and tears them down on delete.
 
 > Full OpenAPI specification: [spec.openapi.yaml](../spec.openapi.yaml)
 

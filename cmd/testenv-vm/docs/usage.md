@@ -22,11 +22,11 @@ testenv-vm orchestrates VM test environments through pluggable provider MCP serv
 ```yaml
 # forge.yaml
 testenv:
-  engine: testenv-vm
+  engine: forge://github.com/alexandremahdhaoui/testenv-vm/cmd/testenv-vm
   spec:
     providers:
       - name: libvirt
-        engine: go://github.com/alexandremahdhaoui/testenv-vm-provider-libvirt
+        engine: go://github.com/alexandremahdhaoui/testenv-vm/cmd/providers/testenv-vm-provider-libvirt
         default: true
     keys:
       - name: vm-ssh

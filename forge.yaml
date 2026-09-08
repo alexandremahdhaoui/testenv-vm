@@ -1,61 +1,54 @@
 name: testenv-vm
 artifactStorePath: .forge/artifact-store.yaml
-# -- envFile is the path to a global environment file to source before any operations
 envFile: .envrc
 
 build:
-  - name: generate-testenv-vm
+  - name: gen-testenv-vm
     src: ./cmd/testenv-vm
-    engine: go://forge-dev
+    engine: forge://forge-dev
 
   - name: testenv-vm
     src: ./cmd/testenv-vm
     dest: ./build/bin
-    engine: go://go-build
-    depends: [generate-testenv-vm]
+    engine: forge://go-build
+    depends: [gen-testenv-vm]
 
   - name: testenv-vm-provider-stub
     src: ./cmd/providers/testenv-vm-provider-stub
     dest: ./build/bin
-    engine: go://go-build
+    engine: forge://go-build
 
   - name: testenv-vm-provider-libvirt
     src: ./cmd/providers/testenv-vm-provider-libvirt
     dest: ./build/bin
-    engine: go://go-build
+    engine: forge://go-build
 
 test:
   - name: lint-tags
-    runner: "go://go-lint-tags"
+    runner: forge://go-lint-tags
 
   - name: lint-licenses
-    runner: "go://go-lint-licenses"
+    runner: forge://go-lint-licenses
 
   - name: lint
-    runner: go://go-lint
+    runner: forge://go-lint
 
   - name: unit
-    runner: go://go-test
+    runner: forge://go-test
 
   - name: integration
-    runner: go://go-test
-    # Integration tests for libvirt provider
-    # Requires: libvirt daemon, qemu-img, genisoimage/mkisofs/xorriso
-    # Tests must have //go:build integration directive
+    runner: forge://go-test
 
   - name: e2e
-    runner: go://go-test
-    # The go-test runner uses the stage name (e2e) as the build tag automatically
-    # Tests must have //go:build e2e directive
+    runner: forge://go-test
 
   - name: e2e_libvirt
-    runner: go://go-test
-    # E2E tests using the libvirt provider with real VMs
-    # Requires: libvirt daemon, qemu-img, genisoimage/mkisofs/xorriso
-    # Tests must have //go:build e2e_libvirt directive
+    runner: forge://go-test
 
   - name: e2e_libvirt_delete
-    runner: go://go-test
-    # Verifies that e2e_libvirt resources were properly cleaned up
-    # Runs after e2e_libvirt to ensure cleanup was successful
-    # Tests must have //go:build e2e_libvirt_delete directive
+    runner: forge://go-test
+
+factory:
+  module: github.com/alexandremahdhaoui/testenv-vm
+  goVersion: "1.26.5"
+  manifest: committed

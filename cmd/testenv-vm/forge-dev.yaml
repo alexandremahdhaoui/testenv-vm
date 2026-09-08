@@ -1,12 +1,13 @@
 name: testenv-vm
-type: testenv-subengine
+kind: mcp-server
+profile: testenv-subengine
 version: 0.1.0
-
+description: Provisions SSH keys, networks and virtual machines through a provider such as libvirt, waits for readiness and tears them down on delete.
 openapi:
   specPath: ./spec.openapi.yaml
-
 generate:
   packageName: main
+  docsBaseURL: https://raw.githubusercontent.com/alexandremahdhaoui/testenv-vm/refs/heads/main
   specTypes:
     enabled: true
     outputPath: api/v1
