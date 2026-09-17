@@ -255,6 +255,8 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		Disk: providerv1.DiskSpec{
 			BaseImage: spec.Disk.BaseImage,
 			Size:      spec.Disk.Size,
+			Bus:       spec.Disk.Bus,
+			WWN:       spec.Disk.Wwn,
 		},
 		Boot: providerv1.BootSpec{
 			Order:    spec.Boot.Order,

@@ -43,11 +43,49 @@ type DomainConfig struct {
 	MemoryMB     int
 	VCPU         int
 	DiskPath     string
+	DiskBus      string
+	DiskWWN      string
 	CloudInitISO string
 	CdromPath    string
 	Networks     []NetworkInterface
 	BootOrder    []string
 	Firmware     string
+}
+
+type domainDevices struct {
+	DomainConfig
+	DiskDev      string
+	CdromDev     string
+	CloudInitDev string
+}
+
+var diskDevByBus = map[string]string{
+	"virtio": "vda",
+	"sata":   "sda",
+	"scsi":   "sda",
+	"ide":    "hda",
+}
+
+func diskBusOrVirtio(bus string) string {
+	if bus == "" {
+		return "virtio"
+	}
+	return bus
+}
+
+func diskDev(bus string) (string, error) {
+	dev, ok := diskDevByBus[diskBusOrVirtio(bus)]
+	if !ok {
+		return "", fmt.Errorf("disk bus %q is not one of virtio, sata, scsi, ide", bus)
+	}
+	return dev, nil
+}
+
+func cdromDevs(diskDev string) (cdrom, cloudInit string) {
+	if diskDev == "sda" {
+		return "sdb", "sdc"
+	}
+	return "sda", "sdb"
 }
 
 func generateBridgeName(networkName string) string {
@@ -180,13 +218,16 @@ const domainTemplate = `<domain type='kvm'>
         <disk type='file' device='disk'>
             <driver name='qemu' type='qcow2'/>
             <source file='{{.DiskPath}}'/>
-            <target dev='vda' bus='virtio'/>
+            <target dev='{{.DiskDev}}' bus='{{.DiskBus}}'/>
+{{- if .DiskWWN}}
+            <wwn>{{.DiskWWN}}</wwn>
+{{- end}}
         </disk>
 {{if .CdromPath}}
         <disk type='file' device='cdrom'>
             <driver name='qemu' type='raw'/>
             <source file='{{.CdromPath}}'/>
-            <target dev='sda' bus='sata'/>
+            <target dev='{{.CdromDev}}' bus='sata'/>
             <readonly/>
         </disk>
 {{end}}
@@ -194,7 +235,7 @@ const domainTemplate = `<domain type='kvm'>
         <disk type='file' device='cdrom'>
             <driver name='qemu' type='raw'/>
             <source file='{{.CloudInitISO}}'/>
-            <target dev='{{if .CdromPath}}sdb{{else}}sda{{end}}' bus='sata'/>
+            <target dev='{{.CloudInitDev}}' bus='sata'/>
             <readonly/>
         </disk>
 {{end}}
@@ -223,8 +264,22 @@ func generateDomainXML(config DomainConfig) (string, error) {
 	if config.VCPU == 0 {
 		config.VCPU = 2
 	}
+	config.DiskBus = diskBusOrVirtio(config.DiskBus)
+	dev, err := diskDev(config.DiskBus)
+	if err != nil {
+		return "", err
+	}
+	cdrom, cloudInit := cdromDevs(dev)
+	if config.CdromPath == "" {
+		cloudInit = cdrom
+	}
 
-	return executeTemplate(domainTemplate, config)
+	return executeTemplate(domainTemplate, domainDevices{
+		DomainConfig: config,
+		DiskDev:      dev,
+		CdromDev:     cdrom,
+		CloudInitDev: cloudInit,
+	})
 }
 
 func executeTemplate(tmpl string, data interface{}) (string, error) {

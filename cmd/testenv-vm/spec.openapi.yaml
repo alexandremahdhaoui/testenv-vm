@@ -332,6 +332,12 @@ components:
         size:
           type: string
           description: 'Disk size (e.g., 20G).'
+        bus:
+          type: string
+          description: 'Disk bus: virtio, sata, scsi or ide. Empty means virtio.'
+        wwn:
+          type: string
+          description: 'World wide name of the disk, 16 hex digits. Needs bus sata, scsi or ide.'
       required:
         - size
 

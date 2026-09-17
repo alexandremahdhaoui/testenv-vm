@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
@@ -50,6 +51,10 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		if _, err := os.Stat(req.Spec.Cdrom); err != nil {
 			return providerv1.ErrorResult(providerv1.NewInvalidSpecError(fmt.Sprintf("cdrom ISO %s: %v", req.Spec.Cdrom, err)))
 		}
+	}
+
+	if diskErr := validateDisk(req.Spec.Disk); diskErr != nil {
+		return providerv1.ErrorResult(diskErr)
 	}
 
 	ipTimeout, timeoutErr := ipResolutionBudget(req.Spec.Readiness)
@@ -98,6 +103,8 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		MemoryMB:     memoryMB,
 		VCPU:         vcpu,
 		DiskPath:     diskPath,
+		DiskBus:      req.Spec.Disk.Bus,
+		DiskWWN:      req.Spec.Disk.WWN,
 		CloudInitISO: isoPath,
 		CdromPath:    req.Spec.Cdrom,
 		Networks:     networkInterfaces(networkNames, req.Spec.Boot.Order),
@@ -215,6 +222,24 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 
 	p.vms[req.Name] = state
 	return providerv1.SuccessResult(state)
+}
+
+var wwnPattern = regexp.MustCompile(`^[0-9a-fA-F]{16}$`)
+
+func validateDisk(disk providerv1.DiskSpec) *providerv1.OperationError {
+	if _, err := diskDev(disk.Bus); err != nil {
+		return providerv1.NewInvalidSpecError(err.Error())
+	}
+	if disk.WWN == "" {
+		return nil
+	}
+	if !wwnPattern.MatchString(disk.WWN) {
+		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %q is not 16 hex digits", disk.WWN))
+	}
+	if diskBusOrVirtio(disk.Bus) == "virtio" {
+		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %s needs bus sata, scsi or ide, virtio-blk carries no wwn", disk.WWN))
+	}
+	return nil
 }
 
 func requestedNetworkNames(spec *providerv1.VMSpec) ([]string, *providerv1.OperationError) {
