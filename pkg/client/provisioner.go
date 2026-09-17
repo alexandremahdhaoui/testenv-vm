@@ -30,16 +30,8 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
 
-// Compile-time check that RuntimeProvisioner implements ClientProvider.
 var _ ClientProvider = (*RuntimeProvisioner)(nil)
 
-// RuntimeProvisioner enables runtime VM creation during tests.
-// It implements ClientProvider to provide VM info lookup, and additionally
-// supports creating and deleting VMs at runtime.
-//
-// Thread safety: RuntimeProvisioner uses a RWMutex for thread safety during
-// the TEST PHASE. Ownership of envState is transferred from the Orchestrator
-// to RuntimeProvisioner after Create() returns.
 type RuntimeProvisioner struct {
 	manager     *provider.Manager
 	store       *state.Store
@@ -49,25 +41,15 @@ type RuntimeProvisioner struct {
 	mu          sync.RWMutex
 }
 
-// RuntimeProvisionerConfig contains configuration for NewRuntimeProvisioner.
 type RuntimeProvisionerConfig struct {
-	// Manager is the provider manager for MCP calls.
-	Manager *provider.Manager
-	// Store is the state store for persistence.
-	Store *state.Store
-	// EnvState is the shared environment state reference.
-	EnvState *v1.EnvironmentState
-	// TemplateCtx is the template context for rendering.
+	Manager     *provider.Manager
+	Store       *state.Store
+	EnvState    *v1.EnvironmentState
 	TemplateCtx *spec.TemplateContext
-	// Spec is the testenv specification for provider resolution.
-	Spec *v1.Spec
+	Spec        *v1.Spec
 }
 
-// NewRuntimeProvisioner creates a new RuntimeProvisioner from the given configuration.
-// It resolves the default provider from spec.DefaultProvider or the first provider
-// marked as Default: true. Returns an error if no default provider can be determined.
 func NewRuntimeProvisioner(cfg RuntimeProvisionerConfig) (*RuntimeProvisioner, error) {
-	// Validate required fields
 	if cfg.Manager == nil {
 		return nil, fmt.Errorf("RuntimeProvisioner: manager is required")
 	}
@@ -84,10 +66,8 @@ func NewRuntimeProvisioner(cfg RuntimeProvisionerConfig) (*RuntimeProvisioner, e
 		return nil, fmt.Errorf("RuntimeProvisioner: spec is required")
 	}
 
-	// Resolve default provider
 	defaultProv := cfg.Spec.DefaultProvider
 	if defaultProv == "" {
-		// Find first provider with Default: true
 		for _, p := range cfg.Spec.Providers {
 			if p.Default {
 				defaultProv = p.Name
@@ -109,13 +89,10 @@ func NewRuntimeProvisioner(cfg RuntimeProvisionerConfig) (*RuntimeProvisioner, e
 	}, nil
 }
 
-// GetVMInfo implements ClientProvider interface.
-// It returns connection information for a VM by looking up state.
 func (rp *RuntimeProvisioner) GetVMInfo(vmName string) (*VMInfo, error) {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 
-	// Look up VM in envState.Resources.VMs
 	if rp.envState.Resources.VMs == nil {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q not found (no VMs in state)", vmName)
 	}
@@ -125,36 +102,30 @@ func (rp *RuntimeProvisioner) GetVMInfo(vmName string) (*VMInfo, error) {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q not found", vmName)
 	}
 
-	// Check VM status
 	if resourceState.Status != v1.StatusReady {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q is not ready (status: %s)", vmName, resourceState.Status)
 	}
 
-	// Extract connection info from resourceState.State
 	state := resourceState.State
 	if state == nil {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q has no state data", vmName)
 	}
 
-	// Extract IP address
 	ip, ok := state["ip"].(string)
 	if !ok || ip == "" {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q missing ip in state", vmName)
 	}
 
-	// Extract SSH user (stored during CreateVM from cloud-init config)
 	sshUser, ok := state["sshUser"].(string)
 	if !ok || sshUser == "" {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q missing sshUser in state", vmName)
 	}
 
-	// Extract private key path (stored during CreateVM)
 	privateKeyPath, ok := state["privateKeyPath"].(string)
 	if !ok || privateKeyPath == "" {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q missing privateKeyPath in state", vmName)
 	}
 
-	// Read private key content from file
 	privateKey, err := os.ReadFile(privateKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("RuntimeProvisioner: VM %q failed to read private key from %q: %w", vmName, privateKeyPath, err)
@@ -168,19 +139,13 @@ func (rp *RuntimeProvisioner) GetVMInfo(vmName string) (*VMInfo, error) {
 	}, nil
 }
 
-// GetTemplateContext returns the template context for accessing resource data.
-// This allows test code to inspect created resources, build template strings
-// dynamically, and access key paths, network info, etc.
 func (rp *RuntimeProvisioner) GetTemplateContext() *spec.TemplateContext {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 	return rp.templateCtx
 }
 
-// renderVMSpec creates a deep copy and renders templates in a VM spec.
-// Uses JSON marshal/unmarshal for deep copy to avoid shared pointer issues.
 func (rp *RuntimeProvisioner) renderVMSpec(vmSpec v1.VMSpec) (v1.VMSpec, error) {
-	// Deep copy via JSON
 	data, err := json.Marshal(vmSpec)
 	if err != nil {
 		return v1.VMSpec{}, fmt.Errorf("failed to marshal VM spec: %w", err)
@@ -190,7 +155,6 @@ func (rp *RuntimeProvisioner) renderVMSpec(vmSpec v1.VMSpec) (v1.VMSpec, error) 
 		return v1.VMSpec{}, fmt.Errorf("failed to unmarshal VM spec: %w", err)
 	}
 
-	// Render templates
 	if err := spec.RenderSpec(&copy, rp.templateCtx); err != nil {
 		return v1.VMSpec{}, fmt.Errorf("failed to render templates: %w", err)
 	}
@@ -198,13 +162,9 @@ func (rp *RuntimeProvisioner) renderVMSpec(vmSpec v1.VMSpec) (v1.VMSpec, error) 
 	return copy, nil
 }
 
-// diskSizePattern validates disk size format like "10G", "100M", "1T".
 var diskSizePattern = regexp.MustCompile(`^[1-9][0-9]*[GMTK]$`)
 
-// validateRuntimeVM validates a runtime VM spec after template rendering.
-// It verifies referenced resources exist in the current environment state.
 func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, providerName string) error {
-	// Validate required fields
 	if vmSpec.Memory <= 0 {
 		return fmt.Errorf("VM %q: memory must be greater than 0", name)
 	}
@@ -221,7 +181,6 @@ func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, p
 		return fmt.Errorf("VM %q: network is required", name)
 	}
 
-	// Verify the referenced network exists in state
 	if rp.envState.Resources.Networks == nil {
 		return fmt.Errorf("VM %q: network %q not found (no networks in state)", name, vmSpec.Network)
 	}
@@ -233,7 +192,6 @@ func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, p
 		return fmt.Errorf("VM %q: network %q is not ready (status: %s)", name, vmSpec.Network, networkState.Status)
 	}
 
-	// Verify provider exists or use default
 	resolvedProvider := providerName
 	if resolvedProvider == "" {
 		resolvedProvider = rp.defaultProv
@@ -245,8 +203,6 @@ func (rp *RuntimeProvisioner) validateRuntimeVM(name string, vmSpec v1.VMSpec, p
 	return nil
 }
 
-// convertVMSpec converts v1.VMSpec to providerv1.VMSpec.
-// This is similar to executor.convertVMSpec but operates on v1.VMSpec directly.
 func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 	result := providerv1.VMSpec{
 		Memory:  spec.Memory,
@@ -264,7 +220,6 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		},
 	}
 
-	// Check if CloudInit has any content (it's a value type, not a pointer)
 	if spec.CloudInit.Hostname != "" || len(spec.CloudInit.Users) > 0 || len(spec.CloudInit.Packages) > 0 {
 		result.CloudInit = &providerv1.CloudInitSpec{
 			Hostname: spec.CloudInit.Hostname,
@@ -279,7 +234,6 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		}
 	}
 
-	// Check if Readiness.Ssh has any content (they're value types, not pointers)
 	if spec.Readiness.Ssh.Enabled {
 		result.Readiness = &providerv1.ReadinessSpec{
 			SSH: &providerv1.SSHReadinessSpec{
@@ -294,13 +248,8 @@ func convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 	return result
 }
 
-// CreateVM creates a new VM at runtime and returns a Client for it.
-// The returned Client can be used to interact with the VM.
-// This method uses a lock-release-lock pattern to avoid holding mutex during network I/O.
 func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec v1.VMSpec) (*Client, error) {
-	// Phase 1: Pre-flight checks (under lock)
 	rp.mu.Lock()
-	// Check if VM name already exists
 	if rp.envState.Resources.VMs == nil {
 		rp.envState.Resources.VMs = make(map[string]*v1.ResourceState)
 	}
@@ -308,7 +257,6 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		rp.mu.Unlock()
 		return nil, fmt.Errorf("CreateVM: VM %q already exists", name)
 	}
-	// Reserve the VM name by creating a placeholder entry with status "creating"
 	rp.envState.Resources.VMs[name] = &v1.ResourceState{
 		Provider:  rp.defaultProv,
 		Status:    v1.StatusCreating,
@@ -316,40 +264,33 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 	}
 	rp.mu.Unlock()
 
-	// Phase 2: Template rendering and validation (no lock - CPU only)
 	renderedSpec, err := rp.renderVMSpec(vmSpec)
 	if err != nil {
-		// Clean up placeholder on error
 		rp.mu.Lock()
 		delete(rp.envState.Resources.VMs, name)
 		rp.mu.Unlock()
 		return nil, fmt.Errorf("CreateVM: %w", err)
 	}
 
-	// Validate rendered spec
 	if err := rp.validateRuntimeVM(name, renderedSpec, ""); err != nil {
-		// Clean up placeholder on error
 		rp.mu.Lock()
 		delete(rp.envState.Resources.VMs, name)
 		rp.mu.Unlock()
 		return nil, fmt.Errorf("CreateVM: %w", err)
 	}
 
-	// Phase 3: Provider call (no lock - network I/O)
 	request := &providerv1.VMCreateRequest{
 		Name:         name,
 		Spec:         convertVMSpec(renderedSpec),
-		ProviderSpec: nil, // Runtime VMs don't support ProviderSpec
+		ProviderSpec: nil,
 	}
 
 	result, err := rp.manager.Call(rp.defaultProv, "vm_create", request)
 
-	// Phase 4: State update (under lock)
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 
 	if err != nil {
-		// Update state to failed
 		rp.envState.Resources.VMs[name].Status = v1.StatusFailed
 		rp.envState.Resources.VMs[name].Error = err.Error()
 		rp.envState.Resources.VMs[name].UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -373,7 +314,6 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		return nil, fmt.Errorf("CreateVM: provider returned error: %s", errMsg)
 	}
 
-	// Convert resource state to map
 	resourceState, err := convertResourceToMap(result.Resource)
 	if err != nil {
 		rp.envState.Resources.VMs[name].Status = v1.StatusFailed
@@ -383,7 +323,6 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		return nil, fmt.Errorf("CreateVM: failed to convert resource state: %w", err)
 	}
 
-	// Extract SSH user from cloud-init config (or "root" if not specified)
 	sshUser := "root"
 	if len(renderedSpec.CloudInit.Users) > 0 {
 		if renderedSpec.CloudInit.Users[0].Name != "" {
@@ -391,15 +330,12 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		}
 	}
 
-	// Find private key path from templateCtx.Keys
 	privateKeyPath := ""
 	if len(renderedSpec.CloudInit.Users) > 0 {
-		// Look for the first key that matches an SSH authorized key
-		for keyName, keyData := range rp.templateCtx.Keys {
+		for _, keyData := range rp.templateCtx.Keys {
 			for _, authKey := range renderedSpec.CloudInit.Users[0].SshAuthorizedKeys {
 				if authKey == keyData.PublicKey {
 					privateKeyPath = keyData.PrivateKeyPath
-					_ = keyName // suppress unused variable warning
 					break
 				}
 			}
@@ -409,14 +345,12 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		}
 	}
 
-	// Store sshUser and privateKeyPath in resourceState for GetVMInfo to use
 	if resourceState == nil {
 		resourceState = make(map[string]any)
 	}
 	resourceState["sshUser"] = sshUser
 	resourceState["privateKeyPath"] = privateKeyPath
 
-	// Update state with success
 	now := time.Now().UTC().Format(time.RFC3339)
 	rp.envState.Resources.VMs[name] = &v1.ResourceState{
 		Provider:  rp.defaultProv,
@@ -426,7 +360,6 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		UpdatedAt: now,
 	}
 
-	// Append new phase to ExecutionPlan.Phases with single VM ResourceRef
 	if rp.envState.ExecutionPlan == nil {
 		rp.envState.ExecutionPlan = &v1.ExecutionPlan{
 			Phases: []v1.Phase{},
@@ -440,7 +373,6 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		}},
 	})
 
-	// Update templateCtx.VMs with VMTemplateData
 	if rp.templateCtx.VMs == nil {
 		rp.templateCtx.VMs = make(map[string]spec.VMTemplateData)
 	}
@@ -453,14 +385,11 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 		SSHCommand: getString(resourceState, "sshCommand"),
 	}
 
-	// Persist state
 	rp.envState.UpdatedAt = now
 	if err := rp.store.Save(rp.envState); err != nil {
 		return nil, fmt.Errorf("CreateVM: failed to save state: %w", err)
 	}
 
-	// Create and return new Client for the VM with provisioner attached
-	// so the returned Client can also create VMs.
 	client, err := NewClient(rp, name, WithProvisioner(rp))
 	if err != nil {
 		return nil, fmt.Errorf("CreateVM: failed to create client: %w", err)
@@ -469,18 +398,15 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 	return client, nil
 }
 
-// convertResourceToMap converts a resource to a map[string]any.
 func convertResourceToMap(resource any) (map[string]any, error) {
 	if resource == nil {
 		return nil, nil
 	}
 
-	// If it's already a map, return it
 	if m, ok := resource.(map[string]any); ok {
 		return m, nil
 	}
 
-	// Otherwise, convert via JSON
 	data, err := json.Marshal(resource)
 	if err != nil {
 		return nil, err
@@ -494,7 +420,6 @@ func convertResourceToMap(resource any) (map[string]any, error) {
 	return result, nil
 }
 
-// getString safely extracts a string from a map.
 func getString(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
@@ -504,13 +429,10 @@ func getString(m map[string]any, key string) string {
 	return ""
 }
 
-// DeleteVM deletes a runtime-created VM.
-// This is optional - VMs are automatically cleaned up when the environment is deleted.
 func (rp *RuntimeProvisioner) DeleteVM(ctx context.Context, name string) error {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 
-	// Look up VM in envState.Resources.VMs
 	if rp.envState.Resources.VMs == nil {
 		return fmt.Errorf("DeleteVM: VM %q not found (no VMs in state)", name)
 	}
@@ -520,27 +442,21 @@ func (rp *RuntimeProvisioner) DeleteVM(ctx context.Context, name string) error {
 		return fmt.Errorf("DeleteVM: VM %q not found", name)
 	}
 
-	// Get provider name from ResourceState.Provider
 	providerName := resourceState.Provider
 	if providerName == "" {
 		providerName = rp.defaultProv
 	}
 
-	// Build DeleteRequest
 	request := &providerv1.DeleteRequest{
 		Name: name,
 	}
 
-	// Call provider to delete VM (best effort - continue on error)
 	_, err := rp.manager.Call(providerName, "vm_delete", request)
-	// Error will be returned after state is updated - we continue to mark as destroyed
 
-	// Update state to destroyed
 	now := time.Now().UTC().Format(time.RFC3339)
 	resourceState.Status = v1.StatusDestroyed
 	resourceState.UpdatedAt = now
 
-	// Persist state
 	rp.envState.UpdatedAt = now
 	if saveErr := rp.store.Save(rp.envState); saveErr != nil {
 		if err != nil {
@@ -549,7 +465,6 @@ func (rp *RuntimeProvisioner) DeleteVM(ctx context.Context, name string) error {
 		return fmt.Errorf("DeleteVM: failed to save state: %w", saveErr)
 	}
 
-	// Return original error if provider call failed
 	if err != nil {
 		return fmt.Errorf("DeleteVM: provider call failed (state updated to destroyed): %w", err)
 	}

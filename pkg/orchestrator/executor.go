@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator provides resource orchestration and execution.
 package orchestrator
 
 import (
@@ -32,25 +31,19 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
 
-// Executor executes resource operations using providers.
 type Executor struct {
 	manager  *provider.Manager
 	store    *state.Store
 	imageMgr *image.CacheManager
-	mu       sync.Mutex // Protects state modifications during parallel execution
+	mu       sync.Mutex
 }
 
-// ExecutionResult contains the result of an execution operation.
 type ExecutionResult struct {
-	// Success indicates if all operations completed successfully.
 	Success bool
-	// Errors contains any errors that occurred during execution.
-	Errors []error
-	// State is the updated environment state.
-	State *v1.EnvironmentState
+	Errors  []error
+	State   *v1.EnvironmentState
 }
 
-// NewExecutor creates a new Executor with the given provider manager, state store, and image cache manager.
 func NewExecutor(manager *provider.Manager, store *state.Store, imageMgr *image.CacheManager) *Executor {
 	return &Executor{
 		manager:  manager,
@@ -59,10 +52,6 @@ func NewExecutor(manager *provider.Manager, store *state.Store, imageMgr *image.
 	}
 }
 
-// ExecuteCreate executes the creation of resources according to the execution plan.
-// Phases are executed sequentially, while resources within each phase are executed in parallel.
-// Templates are rendered just-in-time before each resource creation.
-// The templatedFields parameter indicates which fields need Phase 2 validation after rendering.
 func (e *Executor) ExecuteCreate(
 	ctx context.Context,
 	spec *v1.Spec,
@@ -85,7 +74,6 @@ func (e *Executor) ExecuteCreate(
 		State:   envState,
 	}
 
-	// Execute phases sequentially
 	for phaseIdx, phase := range plan {
 		if len(phase) == 0 {
 			continue
@@ -96,7 +84,6 @@ func (e *Executor) ExecuteCreate(
 			result.Errors = append(result.Errors, phaseErrors...)
 			result.Success = false
 
-			// Record errors in state
 			for i, err := range phaseErrors {
 				if i < len(phase) {
 					envState.Errors = append(envState.Errors, v1.ErrorRecord{
@@ -108,14 +95,12 @@ func (e *Executor) ExecuteCreate(
 				}
 			}
 
-			// Update status to failed
 			envState.Status = v1.StatusFailed
 			envState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 			if saveErr := e.store.Save(envState); saveErr != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("failed to save state after phase %d error: %w", phaseIdx, saveErr))
 			}
 
-			// Return on first phase with errors
 			return result, nil
 		}
 	}
@@ -123,16 +108,11 @@ func (e *Executor) ExecuteCreate(
 	return result, nil
 }
 
-// ExecuteDelete executes the deletion of resources in reverse order.
-// Phases are reversed and processed sequentially, with resources in each phase deleted in parallel.
-// Best-effort: continues on individual failures, collecting all errors.
-// Note: Status management is handled by the orchestrator, not the executor.
 func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentState, isoConfig *IsolationConfig) error {
 	if envState == nil {
 		return fmt.Errorf("state cannot be nil")
 	}
 
-	// Get the execution plan and reverse the phases
 	var phases [][]v1.ResourceRef
 	if envState.ExecutionPlan != nil {
 		for _, phase := range envState.ExecutionPlan.Phases {
@@ -140,14 +120,12 @@ func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentSt
 		}
 	}
 
-	// Reverse the phases for deletion
 	for i, j := 0, len(phases)-1; i < j; i, j = i+1, j-1 {
 		phases[i], phases[j] = phases[j], phases[i]
 	}
 
 	var allErrors []error
 
-	// Execute deletion phases sequentially
 	for _, phase := range phases {
 		if len(phase) == 0 {
 			continue
@@ -172,7 +150,6 @@ func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentSt
 
 		wg.Wait()
 
-		// Collect errors but continue with next phase (best-effort)
 		allErrors = append(allErrors, phaseErrors...)
 	}
 
@@ -183,8 +160,6 @@ func (e *Executor) ExecuteDelete(ctx context.Context, envState *v1.EnvironmentSt
 	return nil
 }
 
-// executePhase executes all resources in a phase in parallel.
-// Returns errors for any failed resources.
 func (e *Executor) executePhase(
 	ctx context.Context,
 	phase []v1.ResourceRef,
@@ -215,10 +190,6 @@ func (e *Executor) executePhase(
 	return errors
 }
 
-// createResource creates a single resource using the appropriate provider.
-// After template rendering, Phase 2 validation is performed for templated fields.
-// prefixedName returns the provider-level name with the isolation prefix.
-// Internal state always uses the ORIGINAL name (ref.Name); only provider calls use the prefixed name.
 func prefixedName(isoConfig *IsolationConfig, name string) string {
 	if isoConfig == nil || isoConfig.NamePrefix == "" {
 		return name
@@ -235,13 +206,11 @@ func (e *Executor) createResource(
 	templatedFields *specpkg.TemplatedFields,
 	isoConfig *IsolationConfig,
 ) error {
-	// Determine provider name
 	providerName := ref.Provider
 	if providerName == "" {
 		providerName = spec.DefaultProvider
 	}
 
-	// Get the appropriate tool name and request based on resource kind
 	var tool string
 	var request interface{}
 
@@ -252,14 +221,10 @@ func (e *Executor) createResource(
 		if err != nil {
 			return err
 		}
-		// Deep copy and render templates
 		renderedSpec, err := e.renderKeySpec(keySpec, templateCtx)
 		if err != nil {
 			return fmt.Errorf("failed to render key spec: %w", err)
 		}
-		// Default OutputDir to spec.StateDir + "/keys" when not explicitly set.
-		// This ensures key files end up in the spec-defined state directory
-		// rather than the provider's own default state directory.
 		outputDir := renderedSpec.Spec.OutputDir
 		if outputDir == "" && spec.StateDir != "" {
 			outputDir = filepath.Join(spec.StateDir, "keys")
@@ -284,17 +249,14 @@ func (e *Executor) createResource(
 		if err != nil {
 			return err
 		}
-		// Deep copy and render templates
 		renderedSpec, err := e.renderNetworkSpec(networkSpec, templateCtx)
 		if err != nil {
 			return fmt.Errorf("failed to render network spec: %w", err)
 		}
-		// Phase 2 validation for templated fields
 		if err := specpkg.ValidateResourceRefsLate("network", ref.Name, renderedSpec, spec, templatedFields); err != nil {
 			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
 		convertedSpec := e.convertNetworkSpec(renderedSpec.Spec)
-		// Rewrite CIDR and gateway for isolation
 		if isoConfig != nil && isoConfig.OriginalCIDRPrefix != isoConfig.NewCIDRPrefix {
 			convertedSpec.CIDR = strings.ReplaceAll(convertedSpec.CIDR, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
 			convertedSpec.Gateway = strings.ReplaceAll(convertedSpec.Gateway, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
@@ -319,17 +281,14 @@ func (e *Executor) createResource(
 		if err != nil {
 			return err
 		}
-		// Deep copy and render templates
 		renderedSpec, err := e.renderVMSpec(vmSpec, templateCtx)
 		if err != nil {
 			return fmt.Errorf("failed to render vm spec: %w", err)
 		}
-		// Phase 2 validation for templated fields
 		if err := specpkg.ValidateResourceRefsLate("vm", ref.Name, renderedSpec, spec, templatedFields); err != nil {
 			return fmt.Errorf("phase 2 validation failed: %w", err)
 		}
 		convertedVMSpec := e.convertVMSpec(renderedSpec.Spec)
-		// Prefix network references for isolation
 		if isoConfig != nil && isoConfig.NamePrefix != "" {
 			if len(convertedVMSpec.Networks) > 0 {
 				for i, n := range convertedVMSpec.Networks {
@@ -368,7 +327,6 @@ func (e *Executor) createResource(
 		}
 
 	case "image":
-		// Images are handled by the CacheManager, not by providers
 		imageRes, err := e.findImageSpec(spec, ref.Name)
 		if err != nil {
 			return err
@@ -377,7 +335,6 @@ func (e *Executor) createResource(
 		if err != nil {
 			return fmt.Errorf("failed to ensure image %q: %w", ref.Name, err)
 		}
-		// Update template context with image path
 		e.mu.Lock()
 		if templateCtx.Images == nil {
 			templateCtx.Images = make(map[string]specpkg.ImageTemplateData)
@@ -386,7 +343,6 @@ func (e *Executor) createResource(
 			Path: imgState.LocalPath,
 			Name: ref.Name,
 		}
-		// Also register alias if set
 		if imageRes.Spec.Alias != "" {
 			templateCtx.Images[imageRes.Spec.Alias] = specpkg.ImageTemplateData{
 				Path: imgState.LocalPath,
@@ -400,7 +356,6 @@ func (e *Executor) createResource(
 		return fmt.Errorf("unknown resource kind: %s", ref.Kind)
 	}
 
-	// Use default provider if still not set
 	if providerName == "" {
 		for _, p := range spec.Providers {
 			if p.Default {
@@ -414,7 +369,6 @@ func (e *Executor) createResource(
 		return fmt.Errorf("no provider specified for resource %s/%s and no default provider configured", ref.Kind, ref.Name)
 	}
 
-	// Call the provider
 	result, err := e.manager.Call(providerName, tool, request)
 	if err != nil {
 		e.mu.Lock()
@@ -434,20 +388,16 @@ func (e *Executor) createResource(
 		return fmt.Errorf("provider returned error: %s", errMsg)
 	}
 
-	// Update state with the result
 	resourceState, err := e.convertResourceToMap(result.Resource)
 	if err != nil {
 		return fmt.Errorf("failed to convert resource state: %w", err)
 	}
 
-	// Lock to protect state modifications during parallel execution
 	e.mu.Lock()
 	e.updateResourceState(envState, ref, providerName, v1.StatusReady, resourceState, "")
 
-	// Update template context with the new resource data
 	e.updateTemplateContext(templateCtx, ref, resourceState)
 
-	// Persist state
 	envState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	err = e.store.Save(envState)
 	e.mu.Unlock()
@@ -459,20 +409,17 @@ func (e *Executor) createResource(
 	return nil
 }
 
-// deleteResource deletes a single resource using the appropriate provider.
 func (e *Executor) deleteResource(
 	ctx context.Context,
 	ref v1.ResourceRef,
 	envState *v1.EnvironmentState,
 	isoConfig *IsolationConfig,
 ) error {
-	// Lock to protect state reads during parallel execution
 	e.mu.Lock()
 	resourceState := e.getResourceState(envState, ref)
 	e.mu.Unlock()
 
 	if resourceState == nil {
-		// Resource doesn't exist in state, nothing to delete
 		return nil
 	}
 
@@ -481,7 +428,6 @@ func (e *Executor) deleteResource(
 		return fmt.Errorf("no provider found for resource %s/%s", ref.Kind, ref.Name)
 	}
 
-	// Determine the delete tool based on kind
 	var tool string
 	switch ref.Kind {
 	case "key":
@@ -494,21 +440,17 @@ func (e *Executor) deleteResource(
 		return fmt.Errorf("unknown resource kind: %s", ref.Kind)
 	}
 
-	// Create delete request with prefixed name for provider isolation
 	request := &providerv1.DeleteRequest{
 		Name: prefixedName(isoConfig, ref.Name),
 	}
 
-	// Call the provider
 	result, err := e.manager.Call(providerName, tool, request)
 	if err != nil {
 		return fmt.Errorf("provider call failed: %w", err)
 	}
 
 	if !result.Success {
-		// Check if it's a not found error - that's OK for delete
 		if result.Error != nil && result.Error.Code == providerv1.ErrCodeNotFound {
-			// Resource already doesn't exist
 			e.mu.Lock()
 			e.updateResourceState(envState, ref, providerName, v1.StatusDestroyed, nil, "")
 			e.mu.Unlock()
@@ -522,7 +464,6 @@ func (e *Executor) deleteResource(
 		return fmt.Errorf("provider returned error: %s", errMsg)
 	}
 
-	// Update state with lock protection
 	e.mu.Lock()
 	e.updateResourceState(envState, ref, providerName, v1.StatusDestroyed, nil, "")
 	e.mu.Unlock()
@@ -530,7 +471,6 @@ func (e *Executor) deleteResource(
 	return nil
 }
 
-// findKeySpec finds a key resource by name in the spec.
 func (e *Executor) findKeySpec(spec *v1.Spec, name string) (*v1.KeyResource, error) {
 	for i := range spec.Keys {
 		if spec.Keys[i].Name == name {
@@ -540,7 +480,6 @@ func (e *Executor) findKeySpec(spec *v1.Spec, name string) (*v1.KeyResource, err
 	return nil, fmt.Errorf("key resource %q not found in spec", name)
 }
 
-// findNetworkSpec finds a network resource by name in the spec.
 func (e *Executor) findNetworkSpec(spec *v1.Spec, name string) (*v1.NetworkResource, error) {
 	for i := range spec.Networks {
 		if spec.Networks[i].Name == name {
@@ -550,7 +489,6 @@ func (e *Executor) findNetworkSpec(spec *v1.Spec, name string) (*v1.NetworkResou
 	return nil, fmt.Errorf("network resource %q not found in spec", name)
 }
 
-// findVMSpec finds a VM resource by name in the spec.
 func (e *Executor) findVMSpec(spec *v1.Spec, name string) (*v1.VMResource, error) {
 	for i := range spec.Vms {
 		if spec.Vms[i].Name == name {
@@ -560,7 +498,6 @@ func (e *Executor) findVMSpec(spec *v1.Spec, name string) (*v1.VMResource, error
 	return nil, fmt.Errorf("vm resource %q not found in spec", name)
 }
 
-// findImageSpec finds an image resource by name in the spec.
 func (e *Executor) findImageSpec(spec *v1.Spec, name string) (*v1.ImageResource, error) {
 	for i := range spec.Images {
 		if spec.Images[i].Name == name {
@@ -570,9 +507,7 @@ func (e *Executor) findImageSpec(spec *v1.Spec, name string) (*v1.ImageResource,
 	return nil, fmt.Errorf("image resource %q not found in spec", name)
 }
 
-// renderKeySpec creates a deep copy and renders templates in a key spec.
 func (e *Executor) renderKeySpec(original *v1.KeyResource, templateCtx *specpkg.TemplateContext) (*v1.KeyResource, error) {
-	// Deep copy via JSON marshaling
 	data, err := json.Marshal(original)
 	if err != nil {
 		return nil, err
@@ -582,7 +517,6 @@ func (e *Executor) renderKeySpec(original *v1.KeyResource, templateCtx *specpkg.
 		return nil, err
 	}
 
-	// Render templates
 	if err := specpkg.RenderSpec(&copy, templateCtx); err != nil {
 		return nil, err
 	}
@@ -590,9 +524,7 @@ func (e *Executor) renderKeySpec(original *v1.KeyResource, templateCtx *specpkg.
 	return &copy, nil
 }
 
-// renderNetworkSpec creates a deep copy and renders templates in a network spec.
 func (e *Executor) renderNetworkSpec(original *v1.NetworkResource, templateCtx *specpkg.TemplateContext) (*v1.NetworkResource, error) {
-	// Deep copy via JSON marshaling
 	data, err := json.Marshal(original)
 	if err != nil {
 		return nil, err
@@ -602,7 +534,6 @@ func (e *Executor) renderNetworkSpec(original *v1.NetworkResource, templateCtx *
 		return nil, err
 	}
 
-	// Render templates
 	if err := specpkg.RenderSpec(&copy, templateCtx); err != nil {
 		return nil, err
 	}
@@ -610,9 +541,7 @@ func (e *Executor) renderNetworkSpec(original *v1.NetworkResource, templateCtx *
 	return &copy, nil
 }
 
-// renderVMSpec creates a deep copy and renders templates in a VM spec.
 func (e *Executor) renderVMSpec(original *v1.VMResource, templateCtx *specpkg.TemplateContext) (*v1.VMResource, error) {
-	// Deep copy via JSON marshaling
 	data, err := json.Marshal(original)
 	if err != nil {
 		return nil, err
@@ -622,7 +551,6 @@ func (e *Executor) renderVMSpec(original *v1.VMResource, templateCtx *specpkg.Te
 		return nil, err
 	}
 
-	// Render templates
 	if err := specpkg.RenderSpec(&copy, templateCtx); err != nil {
 		return nil, err
 	}
@@ -630,7 +558,6 @@ func (e *Executor) renderVMSpec(original *v1.VMResource, templateCtx *specpkg.Te
 	return &copy, nil
 }
 
-// convertNetworkSpec converts v1.NetworkSpec to providerv1.NetworkSpec.
 func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpec {
 	result := providerv1.NetworkSpec{
 		CIDR:     spec.Cidr,
@@ -639,10 +566,6 @@ func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpe
 		MTU:      spec.Mtu,
 	}
 
-	// Only pass DHCP/DNS/TFTP config when explicitly configured.
-	// The generated spec uses pointer types for nullable sub-specs;
-	// nil means "unconfigured" and lets the provider apply its defaults
-	// (e.g. libvirt defaults DHCP to enabled).
 	if spec.Dhcp != nil {
 		result.DHCP = &providerv1.DHCPSpec{
 			Enabled:    spec.Dhcp.Enabled,
@@ -672,15 +595,12 @@ func (e *Executor) convertNetworkSpec(spec v1.NetworkSpec) providerv1.NetworkSpe
 	return result
 }
 
-// convertVMSpec converts v1.VMSpec to providerv1.VMSpec.
 func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
-	// Ensure boot order is non-nil (JSON serialization requires array, not null)
 	bootOrder := spec.Boot.Order
 	if bootOrder == nil {
 		bootOrder = []string{}
 	}
 
-	// Resolve networks: Networks takes precedence over Network.
 	var networks []string
 	network := spec.Network
 	if len(spec.Networks) > 0 {
@@ -707,7 +627,6 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		},
 	}
 
-	// CloudInit is a value type in generated code, check if any fields are set
 	if spec.CloudInit.Hostname != "" || len(spec.CloudInit.Users) > 0 || len(spec.CloudInit.Packages) > 0 ||
 		len(spec.CloudInit.Runcmd) > 0 || len(spec.CloudInit.WriteFiles) > 0 || len(spec.CloudInit.NetworkConfig.Ethernets) > 0 {
 		result.CloudInit = &providerv1.CloudInitSpec{
@@ -729,18 +648,16 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 				Permissions: wf.Permissions,
 			})
 		}
-		// Convert network config if ethernets are present
 		if len(spec.CloudInit.NetworkConfig.Ethernets) > 0 {
 			result.CloudInit.NetworkConfig = &providerv1.CloudInitNetworkConfig{}
 			for _, eth := range spec.CloudInit.NetworkConfig.Ethernets {
-				dhcp4 := eth.Dhcp4 // Create a local variable for the pointer
+				dhcp4 := eth.Dhcp4
 				providerEth := providerv1.CloudInitEthernetConfig{
 					Name:      eth.Name,
 					DHCP4:     &dhcp4,
 					Addresses: eth.Addresses,
 					Gateway4:  eth.Gateway4,
 				}
-				// Nameservers is a value type, check if addresses are set
 				if len(eth.Nameservers.Addresses) > 0 {
 					providerEth.Nameservers = &providerv1.CloudInitNameservers{
 						Addresses: eth.Nameservers.Addresses,
@@ -751,8 +668,6 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 		}
 	}
 
-	// Build readiness spec from orchestrator-level config
-	// Initialize if any readiness check is enabled
 	if spec.Readiness.Ssh.Enabled || spec.Readiness.CloudInit.Enabled || spec.Readiness.Tcp.Port > 0 {
 		result.Readiness = &providerv1.ReadinessSpec{}
 	}
@@ -784,18 +699,15 @@ func (e *Executor) convertVMSpec(spec v1.VMSpec) providerv1.VMSpec {
 	return result
 }
 
-// convertResourceToMap converts a resource to a map[string]any.
 func (e *Executor) convertResourceToMap(resource any) (map[string]any, error) {
 	if resource == nil {
 		return nil, nil
 	}
 
-	// If it's already a map, return it
 	if m, ok := resource.(map[string]any); ok {
 		return m, nil
 	}
 
-	// Otherwise, convert via JSON
 	data, err := json.Marshal(resource)
 	if err != nil {
 		return nil, err
@@ -809,7 +721,6 @@ func (e *Executor) convertResourceToMap(resource any) (map[string]any, error) {
 	return result, nil
 }
 
-// updateResourceState updates the state for a specific resource.
 func (e *Executor) updateResourceState(
 	envState *v1.EnvironmentState,
 	ref v1.ResourceRef,
@@ -830,7 +741,6 @@ func (e *Executor) updateResourceState(
 		state.CreatedAt = state.UpdatedAt
 	}
 
-	// Initialize maps if needed
 	if envState.Resources.Keys == nil {
 		envState.Resources.Keys = make(map[string]*v1.ResourceState)
 	}
@@ -851,7 +761,6 @@ func (e *Executor) updateResourceState(
 	}
 }
 
-// getResourceState retrieves the state for a specific resource.
 func (e *Executor) getResourceState(envState *v1.EnvironmentState, ref v1.ResourceRef) *v1.ResourceState {
 	switch ref.Kind {
 	case "key":
@@ -870,7 +779,6 @@ func (e *Executor) getResourceState(envState *v1.EnvironmentState, ref v1.Resour
 	return nil
 }
 
-// updateTemplateContext updates the template context with data from a created resource.
 func (e *Executor) updateTemplateContext(templateCtx *specpkg.TemplateContext, ref v1.ResourceRef, resourceData map[string]any) {
 	if templateCtx == nil || resourceData == nil {
 		return
@@ -913,7 +821,6 @@ func (e *Executor) updateTemplateContext(templateCtx *specpkg.TemplateContext, r
 	}
 }
 
-// getString safely extracts a string from a map.
 func getString(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {

@@ -66,6 +66,11 @@ var diskDevByBus = map[string]string{
 	"ide":    "hda",
 }
 
+var wwnBuses = map[string]bool{
+	"ide":  true,
+	"scsi": true,
+}
+
 func diskBusOrVirtio(bus string) string {
 	if bus == "" {
 		return "virtio"
@@ -215,6 +220,9 @@ const domainTemplate = `<domain type='kvm'>
     </features>
     <cpu mode='host-passthrough'/>
     <devices>
+{{- if eq .DiskBus "scsi"}}
+        <controller type='scsi' model='virtio-scsi'/>
+{{- end}}
         <disk type='file' device='disk'>
             <driver name='qemu' type='qcow2'/>
             <source file='{{.DiskPath}}'/>

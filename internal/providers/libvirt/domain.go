@@ -236,8 +236,8 @@ func validateDisk(disk providerv1.DiskSpec) *providerv1.OperationError {
 	if !wwnPattern.MatchString(disk.WWN) {
 		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %q is not 16 hex digits", disk.WWN))
 	}
-	if diskBusOrVirtio(disk.Bus) == "virtio" {
-		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %s needs bus sata, scsi or ide, virtio-blk carries no wwn", disk.WWN))
+	if bus := diskBusOrVirtio(disk.Bus); !wwnBuses[bus] {
+		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %s on bus %s: libvirt carries a wwn only on ide or scsi", disk.WWN, bus))
 	}
 	return nil
 }
