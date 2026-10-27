@@ -385,6 +385,10 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_IP", toEnvVarName(name))] = ip
 			}
 
+			if domain, ok := vmState.State["name"].(string); ok && domain != "" {
+				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_DOMAIN", toEnvVarName(name))] = domain
+			}
+
 			if consoleOutput, ok := vmState.State["consoleOutput"].(string); ok && consoleOutput != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.vm.%s.consoleOutput", name)] = consoleOutput
 				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_CONSOLE_OUTPUT", toEnvVarName(name))] = consoleOutput

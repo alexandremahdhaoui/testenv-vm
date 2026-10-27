@@ -143,8 +143,8 @@ vms:
 images:
   - name: talos-metal-amd64
     spec:
-      source: https://factory.talos.dev/image/376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba/v1.14.0/metal-amd64.iso
-      sha256: c70686a8ef7232e3c881523a686519411c73156f14e2911665b0da781c6d262d
+      source: https://github.com/siderolabs/talos/releases/download/v1.14.0/metal-amd64.iso
+      sha256: 630b8a0fd3461b83189c04c42c208aaeabdb30b2b701868e48704de69d620c86
 networks:
   - name: talos-net
     kind: nat

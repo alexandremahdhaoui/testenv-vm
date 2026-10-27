@@ -118,6 +118,7 @@ func TestTheTalosISOAndTheOpenWrtImageBootAnswerTheirPortsAndLeaveNothingBehind(
 	if len(openwrtBoot) == 0 {
 		t.Errorf("the OpenWrt image writes its boot to the serial port, yet its console output at %s is empty", openwrtConsole)
 	}
+	assertExportedDomainTakesAScreenshot(t, artifact, tmpDir, talosVMName)
 
 	assertImageCached(t, imageCacheDir, "talos-metal-amd64", "metal-amd64.iso")
 	assertImageCached(t, imageCacheDir, "openwrt-x86-64", "openwrt-24.10.8-x86-64-generic-ext4-combined.img.gz")
@@ -164,6 +165,29 @@ func assertConsoleOutputExportedAndReadable(t *testing.T, artifact *v1.TestEnvAr
 		t.Logf("  %s", line)
 	}
 	return want, data
+}
+
+func assertExportedDomainTakesAScreenshot(t *testing.T, artifact *v1.TestEnvArtifact, workDir, vmName string) {
+	t.Helper()
+	envKey := "TESTENV_VM_" + strings.ToUpper(strings.ReplaceAll(vmName, "-", "_")) + "_DOMAIN"
+	want := artifact.Env["TESTENV_VM_NAME_PREFIX"] + "-" + vmName
+	domain := artifact.Env[envKey]
+	if domain != want {
+		t.Errorf("env %s = %q, want %q", envKey, domain, want)
+		return
+	}
+	screenshot := filepath.Join(workDir, vmName+".png")
+	output, err := exec.Command("virsh", "--connect", libvirtURI, "screenshot", domain, "--file", screenshot).CombinedOutput()
+	if err != nil {
+		t.Errorf("virsh screenshot %s: %v: %s", domain, err, output)
+		return
+	}
+	info, err := os.Stat(screenshot)
+	if err != nil || info.Size() == 0 {
+		t.Errorf("the screenshot of %s at %s is missing or empty: %v", domain, screenshot, err)
+		return
+	}
+	t.Logf("virsh screenshot of %s wrote %d bytes", domain, info.Size())
 }
 
 func assertFileIsGone(t *testing.T, path string) {

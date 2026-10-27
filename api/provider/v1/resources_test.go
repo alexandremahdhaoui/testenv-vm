@@ -80,9 +80,6 @@ func TestVMCreateRequest_JSONRoundtrip(t *testing.T) {
 						Firmware:   "uefi",
 						SecureBoot: true,
 					},
-					Console: &ConsoleSpec{
-						Serial: true,
-					},
 					MemoryBacking: &MemoryBackingSpec{
 						Source: "memfd",
 						Access: "shared",
@@ -142,8 +139,6 @@ func TestVMState_JSONRoundtrip(t *testing.T) {
 				UUID:          "abc123-def456",
 				ConsoleOutput: "/var/log/vm/console.log",
 				SSHCommand:    "ssh -i /keys/vm admin@192.168.100.10",
-				VNCAddress:    "localhost:5900",
-				SerialDevice:  "/dev/pts/1",
 				DomainXML:     "<domain>...</domain>",
 				QMPSocket:     "/var/run/qmp/vm.sock",
 				CreatedAt:     "2024-01-01T00:00:00Z",
@@ -411,8 +406,6 @@ func TestVMState_JSONFieldNames(t *testing.T) {
 		UUID:          "uuid",
 		ConsoleOutput: "/log",
 		SSHCommand:    "ssh",
-		VNCAddress:    "vnc",
-		SerialDevice:  "/dev/pts/0",
 		DomainXML:     "<xml/>",
 		QMPSocket:     "/sock",
 		CreatedAt:     "2024-01-01",
@@ -431,7 +424,7 @@ func TestVMState_JSONFieldNames(t *testing.T) {
 
 	expectedFields := []string{
 		"name", "status", "ip", "mac", "uuid", "consoleOutput",
-		"sshCommand", "vncAddress", "serialDevice", "domainXML",
+		"sshCommand", "domainXML",
 		"qmpSocket", "createdAt", "providerState",
 	}
 	for _, field := range expectedFields {

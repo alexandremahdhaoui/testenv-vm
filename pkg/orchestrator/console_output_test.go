@@ -50,3 +50,28 @@ func TestBuildArtifactExportsTheConsoleOutputOfEveryVMInEnvAndMetadata(t *testin
 		t.Errorf("metadata testenv-vm.vm.talos-node.consoleOutput = %q, want the console log path", got)
 	}
 }
+
+func TestBuildArtifactExportsTheLibvirtDomainNameOfEveryVMSoAGateCanScreenshotIt(t *testing.T) {
+	orchestrator, err := NewOrchestrator(newTestConfig(t))
+	if err != nil {
+		t.Fatalf("NewOrchestrator() error = %v", err)
+	}
+	envState := &v1.EnvironmentState{
+		ID: "test-1",
+		Resources: v1.ResourceMap{
+			VMs: map[string]*v1.ResourceState{
+				"talos-node": {
+					Provider: "libvirt",
+					Status:   v1.StatusReady,
+					State:    map[string]any{"name": "1a2b3c4d-talos-node"},
+				},
+			},
+		},
+	}
+
+	artifact := orchestrator.buildArtifact("test-1", envState, nil)
+
+	if got := artifact.Env["TESTENV_VM_TALOS_NODE_DOMAIN"]; got != "1a2b3c4d-talos-node" {
+		t.Errorf("env TESTENV_VM_TALOS_NODE_DOMAIN = %q, want the prefixed libvirt domain name", got)
+	}
+}

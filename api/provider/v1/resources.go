@@ -33,7 +33,6 @@ type VMSpec struct {
 	CloudInit     *CloudInitSpec     `json:"cloudInit,omitempty"`
 	Cdrom         string             `json:"cdrom,omitempty"`
 	Boot          BootSpec           `json:"boot"`
-	Console       *ConsoleSpec       `json:"console,omitempty"`
 	MemoryBacking *MemoryBackingSpec `json:"memoryBacking,omitempty"`
 	VirtioFS      []VirtioFSSpec     `json:"virtioFS,omitempty"`
 	GuestAgent    bool               `json:"guestAgent,omitempty"`
@@ -108,11 +107,6 @@ type BootSpec struct {
 	NVRAMTemplate string   `json:"nvramTemplate,omitempty"`
 }
 
-type ConsoleSpec struct {
-	Serial      bool   `json:"serial"`
-	VNCPassword string `json:"vncPassword,omitempty"`
-}
-
 type MemoryBackingSpec struct {
 	Source string `json:"source,omitempty"`
 	Access string `json:"access,omitempty"`
@@ -158,8 +152,6 @@ type VMState struct {
 	UUID          string            `json:"uuid,omitempty"`
 	ConsoleOutput string            `json:"consoleOutput,omitempty"`
 	SSHCommand    string            `json:"sshCommand,omitempty"`
-	VNCAddress    string            `json:"vncAddress,omitempty"`
-	SerialDevice  string            `json:"serialDevice,omitempty"`
 	DomainXML     string            `json:"domainXML,omitempty"`
 	QMPSocket     string            `json:"qmpSocket,omitempty"`
 	CreatedAt     string            `json:"createdAt,omitempty"`
