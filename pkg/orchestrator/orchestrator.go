@@ -386,6 +386,7 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 			}
 
 			if domain, ok := vmState.State["name"].(string); ok && domain != "" {
+				artifact.Metadata[fmt.Sprintf("testenv-vm.vm.%s.domain", name)] = domain
 				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_DOMAIN", toEnvVarName(name))] = domain
 			}
 

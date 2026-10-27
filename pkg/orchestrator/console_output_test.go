@@ -74,4 +74,7 @@ func TestBuildArtifactExportsTheLibvirtDomainNameOfEveryVMSoAGateCanScreenshotIt
 	if got := artifact.Env["TESTENV_VM_TALOS_NODE_DOMAIN"]; got != "1a2b3c4d-talos-node" {
 		t.Errorf("env TESTENV_VM_TALOS_NODE_DOMAIN = %q, want the prefixed libvirt domain name", got)
 	}
+	if got := artifact.Metadata["testenv-vm.vm.talos-node.domain"]; got != "1a2b3c4d-talos-node" {
+		t.Errorf("metadata testenv-vm.vm.talos-node.domain = %q, want the prefixed libvirt domain name", got)
+	}
 }

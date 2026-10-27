@@ -135,6 +135,8 @@ vms:
               - "{{ .Keys.my-key.PublicKey }}"
 ```
 
+Every VM logs its serial console to `console/<vm>.log` in the testenv artifact directory, exported as `TESTENV_VM_<NAME>_CONSOLE_OUTPUT`. virtlogd rotates the log at 2 MiB. The older output stays readable in `<vm>.log.0`, and virtlogd creates a new log that the gate user cannot read.
+
 ### Booting an ISO
 
 `cdrom` attaches an ISO as the first cdrom device. `boot.order: [cdrom]` boots it. A VM with a cdrom and no `baseImage` gets an empty qcow2 disk of the declared size. `readiness.tcp` waits for a port on the address the DHCP lease reveals.

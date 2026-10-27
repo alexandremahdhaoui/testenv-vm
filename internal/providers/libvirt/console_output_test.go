@@ -105,12 +105,16 @@ func TestCreateConsoleOutputFileTruncatesAPreviousLogAndLeavesAFileTheProviderUs
 	}
 }
 
-func TestCreateConsoleOutputFileCreatesTheMissingParentDirectory(t *testing.T) {
+func TestCreateConsoleOutputFileCreatesTheMissingParentDirectoryAndAFileOnlyItsOwnerCanRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test-1", "console", "box.log")
 	if err := createConsoleOutputFile(path); err != nil {
 		t.Fatalf("createConsoleOutputFile() error = %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil {
 		t.Fatalf("console output file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("console output file mode = %o, want 600", got)
 	}
 }
