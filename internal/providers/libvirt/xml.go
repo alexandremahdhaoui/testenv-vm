@@ -258,7 +258,7 @@ const domainTemplate = `<domain type='kvm'>
         </interface>
 {{- end}}
         <serial type='pty'>
-            <log file='{{.ConsoleOutput}}' append='off'/>
+            <log file='{{.ConsoleOutput}}' append='on'/>
             <target port='0'/>
         </serial>
         <console type='pty'>

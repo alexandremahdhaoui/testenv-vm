@@ -32,7 +32,7 @@ func TestGenerateDomainXMLLogsTheSerialConsoleToTheDeclaredFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateDomainXML() unexpected error: %v", err)
 	}
-	want := "<serial type='pty'>\n            <log file='/artifacts/test-1/console/box.log' append='off'/>\n            <target port='0'/>"
+	want := "<serial type='pty'>\n            <log file='/artifacts/test-1/console/box.log' append='on'/>\n            <target port='0'/>"
 	if !strings.Contains(xml, want) {
 		t.Errorf("domain XML should contain %q\n%s", want, xml)
 	}
@@ -64,16 +64,35 @@ func TestValidateConsoleOutputRefusesAMissingOrRelativePathByName(t *testing.T) 
 	}
 }
 
-func TestCreateConsoleOutputDirMakesTheParentDirectoryOfTheLogFile(t *testing.T) {
+func TestCreateConsoleOutputFileTruncatesAPreviousLogAndLeavesAFileTheProviderUserCanRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test-1", "console", "box.log")
-	if err := createConsoleOutputDir(path); err != nil {
-		t.Fatalf("createConsoleOutputDir() error = %v", err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("creating console directory: %v", err)
 	}
-	info, err := os.Stat(filepath.Dir(path))
+	if err := os.WriteFile(path, []byte("a previous boot"), 0o644); err != nil {
+		t.Fatalf("writing a previous log: %v", err)
+	}
+	if err := createConsoleOutputFile(path); err != nil {
+		t.Fatalf("createConsoleOutputFile() error = %v", err)
+	}
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("console output directory: %v", err)
+		t.Fatalf("console output file: %v", err)
 	}
-	if !info.IsDir() {
-		t.Errorf("console output parent %s is not a directory", filepath.Dir(path))
+	if info.Size() != 0 {
+		t.Errorf("console output file size = %d, want 0 after truncation", info.Size())
+	}
+	if _, err := os.ReadFile(path); err != nil {
+		t.Errorf("the owner cannot read the console output file: %v", err)
+	}
+}
+
+func TestCreateConsoleOutputFileCreatesTheMissingParentDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test-1", "console", "box.log")
+	if err := createConsoleOutputFile(path); err != nil {
+		t.Fatalf("createConsoleOutputFile() error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("console output file: %v", err)
 	}
 }

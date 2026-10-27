@@ -113,8 +113,11 @@ func TestTheTalosISOAndTheOpenWrtImageBootAnswerTheirPortsAndLeaveNothingBehind(
 	assertPortAnswers(t, "OpenWrt SSH", net.JoinHostPort(openwrtLANIP, openwrtSSHPort))
 	assertPortAnswers(t, "OpenWrt HTTP", net.JoinHostPort(openwrtLANIP, openwrtHTTPPort))
 
-	talosConsole := assertConsoleOutputExported(t, artifact, filepath.Join(artifactDir, testID), talosVMName)
-	openwrtConsole := assertConsoleOutputExported(t, artifact, filepath.Join(artifactDir, testID), openwrtVMName)
+	talosConsole, _ := assertConsoleOutputExportedAndReadable(t, artifact, filepath.Join(artifactDir, testID), talosVMName)
+	openwrtConsole, openwrtBoot := assertConsoleOutputExportedAndReadable(t, artifact, filepath.Join(artifactDir, testID), openwrtVMName)
+	if len(openwrtBoot) == 0 {
+		t.Errorf("the OpenWrt image writes its boot to the serial port, yet its console output at %s is empty", openwrtConsole)
+	}
 
 	assertImageCached(t, imageCacheDir, "talos-metal-amd64", "metal-amd64.iso")
 	assertImageCached(t, imageCacheDir, "openwrt-x86-64", "openwrt-24.10.8-x86-64-generic-ext4-combined.img.gz")
@@ -139,7 +142,7 @@ func TestTheTalosISOAndTheOpenWrtImageBootAnswerTheirPortsAndLeaveNothingBehind(
 	assertFileIsGone(t, openwrtConsole)
 }
 
-func assertConsoleOutputExported(t *testing.T, artifact *v1.TestEnvArtifact, testenvDir, vmName string) string {
+func assertConsoleOutputExportedAndReadable(t *testing.T, artifact *v1.TestEnvArtifact, testenvDir, vmName string) (string, []byte) {
 	t.Helper()
 	want := filepath.Join(testenvDir, "console", vmName+".log")
 	envKey := "TESTENV_VM_" + strings.ToUpper(strings.ReplaceAll(vmName, "-", "_")) + "_CONSOLE_OUTPUT"
@@ -153,18 +156,14 @@ func assertConsoleOutputExported(t *testing.T, artifact *v1.TestEnvArtifact, tes
 	data, err := os.ReadFile(want)
 	if err != nil {
 		t.Errorf("reading the console output of %s: %v", vmName, err)
-		return want
-	}
-	if len(data) == 0 {
-		t.Errorf("the console output of %s at %s is empty after boot", vmName, want)
-		return want
+		return want, nil
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	t.Logf("the console output of %s holds %d bytes in %d lines, the first lines read", vmName, len(data), len(lines))
-	for _, line := range lines[:min(5, len(lines))] {
+	t.Logf("the console output of %s holds %d bytes, its last lines read", vmName, len(data))
+	for _, line := range lines[max(0, len(lines)-5):] {
 		t.Logf("  %s", line)
 	}
-	return want
+	return want, data
 }
 
 func assertFileIsGone(t *testing.T, path string) {

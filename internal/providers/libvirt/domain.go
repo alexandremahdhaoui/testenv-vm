@@ -60,7 +60,7 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	if consoleErr := validateConsoleOutput(req.Name, req.ConsoleOutput); consoleErr != nil {
 		return providerv1.ErrorResult(consoleErr)
 	}
-	if err := createConsoleOutputDir(req.ConsoleOutput); err != nil {
+	if err := createConsoleOutputFile(req.ConsoleOutput); err != nil {
 		return providerv1.ErrorResult(providerv1.NewProviderError(err.Error(), false))
 	}
 
@@ -261,7 +261,7 @@ func validateConsoleOutput(vmName, path string) *providerv1.OperationError {
 	return nil
 }
 
-func createConsoleOutputDir(path string) error {
+func createConsoleOutputFile(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating console output directory %s: %w", dir, err)
@@ -270,6 +270,13 @@ func createConsoleOutputDir(path string) error {
 		return fmt.Errorf("opening console output directory %s to libvirt: %w", dir, err)
 	}
 	setLibvirtACLs(dir)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating console output file %s: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("closing console output file %s: %w", path, err)
+	}
 	return nil
 }
 

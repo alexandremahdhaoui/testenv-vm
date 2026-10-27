@@ -560,11 +560,11 @@ func TestIntegration_VMLifecycle(t *testing.T) {
 		if want := "<log file='" + consoleOutput + "'"; !strings.Contains(liveXML, want) {
 			t.Errorf("live domain XML should contain %q\n%s", want, liveXML)
 		}
-		info, err := os.Stat(consoleOutput)
+		data, err := os.ReadFile(consoleOutput)
 		if err != nil {
-			t.Fatalf("console output file %s: %v", consoleOutput, err)
+			t.Fatalf("reading console output file %s: %v", consoleOutput, err)
 		}
-		if info.Size() == 0 {
+		if len(data) == 0 {
 			t.Errorf("console output file %s is empty after boot", consoleOutput)
 		}
 	})
