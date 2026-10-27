@@ -569,6 +569,35 @@ func TestIntegration_VMLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("TheRunningVMHasAScreenThatVirshScreenshotCapturesWithNoGraphicsListener", func(t *testing.T) {
+		dom, err := provider.conn.DomainLookupByName(vmName)
+		if err != nil {
+			t.Fatalf("looking up domain %s: %v", vmName, err)
+		}
+		liveXML, err := provider.conn.DomainGetXMLDesc(dom, 0)
+		if err != nil {
+			t.Fatalf("reading the live XML of domain %s: %v", vmName, err)
+		}
+		if !strings.Contains(liveXML, "<model type='vga'") {
+			t.Errorf("live domain XML should carry a vga video device\n%s", liveXML)
+		}
+		if strings.Contains(liveXML, "<graphics") {
+			t.Errorf("live domain XML should open no graphics listener\n%s", liveXML)
+		}
+		screenshot := filepath.Join(t.TempDir(), vmName+".png")
+		output, err := exec.Command("virsh", "--connect", provider.config.URI, "screenshot", vmName, "--file", screenshot).CombinedOutput()
+		if err != nil {
+			t.Fatalf("virsh screenshot %s: %v: %s", vmName, err, output)
+		}
+		info, err := os.Stat(screenshot)
+		if err != nil {
+			t.Fatalf("screenshot file %s: %v", screenshot, err)
+		}
+		if info.Size() == 0 {
+			t.Errorf("screenshot file %s is empty", screenshot)
+		}
+	})
+
 	t.Run("GetVM", func(t *testing.T) {
 		result := provider.VMGet(vmName)
 		if !result.Success {

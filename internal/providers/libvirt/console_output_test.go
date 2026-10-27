@@ -38,6 +38,24 @@ func TestGenerateDomainXMLLogsTheSerialConsoleToTheDeclaredFile(t *testing.T) {
 	}
 }
 
+func TestGenerateDomainXMLGivesEveryVMAVGAScreenWithNoGraphicsListener(t *testing.T) {
+	xml, err := generateDomainXML(DomainConfig{
+		Name:          "box",
+		DiskPath:      "/disks/box.qcow2",
+		ConsoleOutput: "/artifacts/test-1/console/box.log",
+	})
+	if err != nil {
+		t.Fatalf("generateDomainXML() unexpected error: %v", err)
+	}
+	want := "<video>\n            <model type='vga'/>\n        </video>"
+	if !strings.Contains(xml, want) {
+		t.Errorf("domain XML should contain %q\n%s", want, xml)
+	}
+	if strings.Contains(xml, "<graphics") {
+		t.Errorf("domain XML should open no graphics listener\n%s", xml)
+	}
+}
+
 func TestValidateConsoleOutputRefusesAMissingOrRelativePathByName(t *testing.T) {
 	tests := []struct {
 		name    string

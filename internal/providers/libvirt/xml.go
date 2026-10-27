@@ -264,6 +264,9 @@ const domainTemplate = `<domain type='kvm'>
         <console type='pty'>
             <target type='serial' port='0'/>
         </console>
+        <video>
+            <model type='vga'/>
+        </video>
     </devices>
 </domain>`
 

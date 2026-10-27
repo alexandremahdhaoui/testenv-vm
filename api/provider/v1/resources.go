@@ -110,10 +110,7 @@ type BootSpec struct {
 
 type ConsoleSpec struct {
 	Serial      bool   `json:"serial"`
-	VNC         bool   `json:"vnc,omitempty"`
-	VNCPort     int    `json:"vncPort,omitempty"`
 	VNCPassword string `json:"vncPassword,omitempty"`
-	Spice       bool   `json:"spice,omitempty"`
 }
 
 type MemoryBackingSpec struct {

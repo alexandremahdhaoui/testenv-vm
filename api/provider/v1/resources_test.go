@@ -81,9 +81,7 @@ func TestVMCreateRequest_JSONRoundtrip(t *testing.T) {
 						SecureBoot: true,
 					},
 					Console: &ConsoleSpec{
-						Serial:  true,
-						VNC:     true,
-						VNCPort: 5900,
+						Serial: true,
 					},
 					MemoryBacking: &MemoryBackingSpec{
 						Source: "memfd",
