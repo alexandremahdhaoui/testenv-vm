@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator provides resource orchestration and execution.
 package orchestrator
 
 import (
@@ -34,40 +33,27 @@ import (
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/state"
 )
 
-// IsolationConfig holds per-test-environment isolation parameters that ensure
-// parallel test runs do not collide on host-level resources (libvirt names, subnets).
 type IsolationConfig struct {
-	// NamePrefix is a short hash derived from testID, used to prefix all
-	// provider resource names (keys, networks, VMs).
-	NamePrefix string
-	// OriginalCIDRPrefix is the original subnet prefix from the spec (e.g., "192.168.100.").
+	NamePrefix         string
 	OriginalCIDRPrefix string
-	// NewCIDRPrefix is the derived unique subnet prefix (e.g., "192.168.142.").
-	NewCIDRPrefix string
+	NewCIDRPrefix      string
 }
 
-// shortHash returns the first 8 hex characters of the SHA-256 hash of s.
 func shortHash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return fmt.Sprintf("%x", h[:4])
 }
 
-// hashToOctet maps a testID to a unique third-octet value in the range [2, 253].
-// This avoids 0, 1, 254, 255 which are commonly reserved.
 func hashToOctet(testID string) int {
 	h := sha256.Sum256([]byte(testID))
-	// Use the first 2 bytes to get a uint16, then map to [2, 253]
 	val := binary.BigEndian.Uint16(h[:2])
 	return int(val%252) + 2
 }
 
-// newIsolationConfig creates an IsolationConfig from a testID and the spec's network CIDR.
 func newIsolationConfig(testID string, specNetworks []v1.NetworkResource) *IsolationConfig {
 	prefix := shortHash(testID)
 	octet := hashToOctet(testID)
 
-	// Find the original CIDR prefix from the first network in the spec.
-	// We extract the first three octets to use as the replacement source.
 	originalPrefix := "192.168.100."
 	for _, net := range specNetworks {
 		if net.Spec.Cidr != "" {
@@ -88,18 +74,12 @@ func newIsolationConfig(testID string, specNetworks []v1.NetworkResource) *Isola
 	}
 }
 
-// Config contains configuration for the Orchestrator.
 type Config struct {
-	// StateDir is the directory for state files.
-	StateDir string
-	// ImageCacheDir is the directory for caching VM base images.
-	// If empty, defaults to TESTENV_VM_IMAGE_CACHE_DIR env var or /tmp/testenv-vm/images/.
-	ImageCacheDir string
-	// CleanupOnFailure indicates whether to rollback on failure.
+	StateDir         string
+	ImageCacheDir    string
 	CleanupOnFailure bool
 }
 
-// Orchestrator coordinates resource creation and deletion.
 type Orchestrator struct {
 	config   Config
 	manager  *provider.Manager
@@ -107,26 +87,16 @@ type Orchestrator struct {
 	executor *Executor
 }
 
-// CreateResult contains the results of Orchestrator.Create.
-// Provisioner is returned directly because it cannot be serialized
-// (contains goroutines, mutex, and file handles).
 type CreateResult struct {
-	// Artifact is the serializable test environment artifact.
-	Artifact *v1.TestEnvArtifact
-	// Provisioner enables runtime VM creation during tests.
-	// It is nil if the test does not need runtime provisioning.
+	Artifact    *v1.TestEnvArtifact
 	Provisioner *client.RuntimeProvisioner
 }
 
-// NewOrchestrator creates a new Orchestrator with the given configuration.
 func NewOrchestrator(config Config) (*Orchestrator, error) {
-	// Create provider manager
 	manager := provider.NewManager()
 
-	// Create state store with config.StateDir
 	store := state.NewStore(config.StateDir)
 
-	// Determine image cache directory
 	imageCacheDir := config.ImageCacheDir
 	if imageCacheDir == "" {
 		imageCacheDir = os.Getenv("TESTENV_VM_IMAGE_CACHE_DIR")
@@ -135,13 +105,11 @@ func NewOrchestrator(config Config) (*Orchestrator, error) {
 		imageCacheDir = "/tmp/testenv-vm/images"
 	}
 
-	// Create image cache manager
 	imageMgr, err := image.NewCacheManager(imageCacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create image cache manager: %w", err)
 	}
 
-	// Create executor with manager, store, and image cache manager
 	executor := NewExecutor(manager, store, imageMgr)
 
 	return &Orchestrator{
@@ -152,57 +120,45 @@ func NewOrchestrator(config Config) (*Orchestrator, error) {
 	}, nil
 }
 
-// Create creates a new test environment from the given input.
-// Returns CreateResult containing the artifact and a RuntimeProvisioner
-// for runtime VM creation during tests.
 func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*CreateResult, error) {
 	log.Printf("Creating test environment: testID=%s, stage=%s", input.TestID, input.Stage)
 
-	// 1. Parse spec from input.Spec using v1.SpecFromMap (generated)
 	testenvSpec, err := v1.SpecFromMap(input.Spec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse spec: %w", err)
 	}
 
-	// 2. Generate isolation config for parallel test execution.
-	// This derives unique resource name prefixes and subnet from the testID.
 	isoConfig := newIsolationConfig(input.TestID, testenvSpec.Networks)
 	log.Printf("Isolation config: prefix=%s, originalCIDR=%s, newCIDR=%s",
 		isoConfig.NamePrefix, isoConfig.OriginalCIDRPrefix, isoConfig.NewCIDRPrefix)
 
-	// 3. Validate spec using spec.ValidateEarly (Phase 1)
 	templatedFields, err := spec.ValidateEarly(testenvSpec)
 	if err != nil {
 		return nil, fmt.Errorf("spec validation failed: %w", err)
 	}
 
-	// 4. Create artifact directory: {input.TmpDir}/{input.TestID}/
 	artifactDir := filepath.Join(input.TmpDir, input.TestID)
 	if err := os.MkdirAll(artifactDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create artifact directory %q: %w", artifactDir, err)
 	}
 	log.Printf("Created artifact directory: %s", artifactDir)
 
-	// 4. Start all providers from spec.Providers
 	for _, providerCfg := range testenvSpec.Providers {
 		if err := o.manager.Start(providerCfg); err != nil {
 			return nil, fmt.Errorf("failed to start provider %q: %w", providerCfg.Name, err)
 		}
 	}
 
-	// 5. Build DAG using BuildDAG
 	dag, err := BuildDAG(testenvSpec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build DAG: %w", err)
 	}
 
-	// Get execution phases from DAG
 	phases, err := dag.TopologicalSort()
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute execution phases: %w", err)
 	}
 
-	// 6. Create initial state (EnvironmentState with status=StatusCreating)
 	now := time.Now().UTC().Format(time.RFC3339)
 	envState := &v1.EnvironmentState{
 		ID:          input.TestID,
@@ -221,28 +177,23 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 		Errors:        []v1.ErrorRecord{},
 	}
 
-	// 7. Save state
 	if err := o.store.Save(envState); err != nil {
 		return nil, fmt.Errorf("failed to save initial state: %w", err)
 	}
 
-	// 8. Create template context using spec.NewTemplateContext()
 	templateCtx := spec.NewTemplateContext()
 
-	// 9. Populate template context Env from input.Env
 	if input.Env != nil {
 		for k, v := range input.Env {
 			templateCtx.Env[k] = v
 		}
 	}
 
-	// 10. Execute phases using executor.ExecuteCreate (with templated fields for Phase 2 validation)
 	result, err := o.executor.ExecuteCreate(ctx, testenvSpec, phases, templateCtx, envState, templatedFields, isoConfig)
 	if err != nil {
 		return nil, fmt.Errorf("execution error: %w", err)
 	}
 
-	// 11. If error and CleanupOnFailure: rollback, update state to failed, return error
 	if !result.Success {
 		if o.config.CleanupOnFailure {
 			log.Printf("Execution failed, performing rollback")
@@ -252,14 +203,12 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 			}
 		}
 
-		// Update state to failed
 		envState.Status = v1.StatusFailed
 		envState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if saveErr := o.store.Save(envState); saveErr != nil {
 			log.Printf("Failed to save failed state: %v", saveErr)
 		}
 
-		// Combine all error messages
 		var errMsgs []string
 		for _, e := range result.Errors {
 			errMsgs = append(errMsgs, e.Error())
@@ -267,17 +216,14 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 		return nil, fmt.Errorf("create failed: %v", errMsgs)
 	}
 
-	// 12. Update state to StatusReady
 	envState.Status = v1.StatusReady
 	envState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := o.store.Save(envState); err != nil {
 		return nil, fmt.Errorf("failed to save ready state: %w", err)
 	}
 
-	// 13. Build TestEnvArtifact
 	artifact := o.buildArtifact(input.TestID, envState, isoConfig)
 
-	// 14. Create RuntimeProvisioner for runtime VM creation
 	provisioner, err := client.NewRuntimeProvisioner(client.RuntimeProvisionerConfig{
 		Manager:     o.manager,
 		Store:       o.store,
@@ -296,19 +242,15 @@ func (o *Orchestrator) Create(ctx context.Context, input *v1.CreateInput) (*Crea
 	}, nil
 }
 
-// Delete deletes a test environment.
 func (o *Orchestrator) Delete(ctx context.Context, input *v1.DeleteInput) error {
 	log.Printf("Deleting test environment: testID=%s", input.TestID)
 
-	// 1. Load state from store using input.TestID
 	envState, err := o.store.Load(input.TestID)
 	if err != nil {
-		// 2. If not found, return success (already deleted)
 		if os.IsNotExist(err) {
 			log.Printf("State not found for testID %s, assuming already deleted", input.TestID)
 			return nil
 		}
-		// Check if the error message indicates "not found"
 		if isNotFoundError(err) {
 			log.Printf("State not found for testID %s, assuming already deleted", input.TestID)
 			return nil
@@ -316,65 +258,51 @@ func (o *Orchestrator) Delete(ctx context.Context, input *v1.DeleteInput) error 
 		return fmt.Errorf("failed to load state: %w", err)
 	}
 
-	// 3. Update state to StatusDestroying
 	envState.Status = v1.StatusDestroying
 	envState.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := o.store.Save(envState); err != nil {
 		log.Printf("Failed to save destroying state: %v", err)
 	}
 
-	// 4. Start providers if needed (from state.Spec.Providers)
 	if envState.Spec != nil {
 		for _, providerCfg := range envState.Spec.Providers {
-			// Check if provider is already running
 			if _, exists := o.manager.GetInfo(providerCfg.Name); exists {
 				continue
 			}
 			if err := o.manager.Start(providerCfg); err != nil {
 				log.Printf("Failed to start provider %q for deletion: %v", providerCfg.Name, err)
-				// Continue anyway - best effort
 			}
 		}
 	}
 
-	// 5. Re-derive isolation config from testID (same deterministic hash)
 	var networks []v1.NetworkResource
 	if envState.Spec != nil {
 		networks = envState.Spec.Networks
 	}
 	isoConfig := newIsolationConfig(input.TestID, networks)
 
-	// 6. Execute delete in reverse order using executor.ExecuteDelete
 	if err := o.executor.ExecuteDelete(ctx, envState, isoConfig); err != nil {
 		log.Printf("Delete completed with errors: %v", err)
-		// Continue anyway - best effort
 	}
 
-	// 6. Delete state file
 	if err := o.store.Delete(input.TestID); err != nil {
 		log.Printf("Failed to delete state file: %v", err)
-		// Continue anyway - best effort
 	}
 
-	// 7. Remove artifact directory if exists
 	if envState.ArtifactDir != "" {
 		if err := os.RemoveAll(envState.ArtifactDir); err != nil {
 			log.Printf("Failed to remove artifact directory %q: %v", envState.ArtifactDir, err)
-			// Continue anyway - best effort
 		}
 	}
 
-	// 8. Return nil (best-effort, don't fail on cleanup errors)
 	log.Printf("Test environment deleted: testID=%s", input.TestID)
 	return nil
 }
 
-// Close stops all providers.
 func (o *Orchestrator) Close() error {
 	return o.manager.StopAll()
 }
 
-// buildExecutionPlan converts phases to an ExecutionPlan.
 func buildExecutionPlan(phases [][]v1.ResourceRef) *v1.ExecutionPlan {
 	if len(phases) == 0 {
 		return nil
@@ -393,7 +321,6 @@ func buildExecutionPlan(phases [][]v1.ResourceRef) *v1.ExecutionPlan {
 	return plan
 }
 
-// buildArtifact builds the TestEnvArtifact from the environment state.
 func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentState, isoConfig *IsolationConfig) *v1.TestEnvArtifact {
 	artifact := &v1.TestEnvArtifact{
 		TestID:           testID,
@@ -403,17 +330,13 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 		Env:              make(map[string]string),
 	}
 
-	// Export isolation config as environment variables for test code
 	if isoConfig != nil {
 		artifact.Env["TESTENV_VM_NAME_PREFIX"] = isoConfig.NamePrefix
 	}
 
-	// Map SSH key paths from state
 	for name, keyState := range envState.Resources.Keys {
 		if keyState.State != nil {
-			// Extract private key path
 			if privateKeyPath, ok := keyState.State["privateKeyPath"].(string); ok && privateKeyPath != "" {
-				// Use relative path from artifact dir if possible
 				relPath := privateKeyPath
 				if envState.ArtifactDir != "" {
 					if rel, err := filepath.Rel(envState.ArtifactDir, privateKeyPath); err == nil {
@@ -425,64 +348,57 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 				artifact.Env[fmt.Sprintf("TESTENV_KEY_%s_PRIVATE_PATH", toEnvVarName(name))] = privateKeyPath
 			}
 
-			// Extract public key path
 			if publicKeyPath, ok := keyState.State["publicKeyPath"].(string); ok && publicKeyPath != "" {
 				artifact.ManagedResources = append(artifact.ManagedResources, publicKeyPath)
 			}
 
-			// Add fingerprint to metadata
 			if fingerprint, ok := keyState.State["fingerprint"].(string); ok && fingerprint != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.key.%s.fingerprint", name)] = fingerprint
 			}
 		}
 
-		// Add resource reference to managed resources
 		artifact.ManagedResources = append(artifact.ManagedResources,
 			fmt.Sprintf("testenv-vm://key/%s", name))
 	}
 
-	// Map network info to metadata and env
 	for name, networkState := range envState.Resources.Networks {
 		if networkState.State != nil {
-			// Extract network IP
 			if ip, ok := networkState.State["ip"].(string); ok && ip != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.network.%s.ip", name)] = ip
 				artifact.Env[fmt.Sprintf("TESTENV_NETWORK_%s_IP", toEnvVarName(name))] = ip
 			}
 
-			// Extract interface name
 			if ifName, ok := networkState.State["interfaceName"].(string); ok && ifName != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.network.%s.interface", name)] = ifName
 				artifact.Env[fmt.Sprintf("TESTENV_NETWORK_%s_INTERFACE", toEnvVarName(name))] = ifName
 			}
 		}
 
-		// Add resource reference to managed resources
 		artifact.ManagedResources = append(artifact.ManagedResources,
 			fmt.Sprintf("testenv-vm://network/%s", name))
 	}
 
-	// Map VM info to metadata and env
 	for name, vmState := range envState.Resources.VMs {
 		if vmState.State != nil {
-			// Extract VM IP
 			if ip, ok := vmState.State["ip"].(string); ok && ip != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.vm.%s.ip", name)] = ip
 				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_IP", toEnvVarName(name))] = ip
 			}
 
-			// Extract SSH command
+			if consoleOutput, ok := vmState.State["consoleOutput"].(string); ok && consoleOutput != "" {
+				artifact.Metadata[fmt.Sprintf("testenv-vm.vm.%s.consoleOutput", name)] = consoleOutput
+				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_CONSOLE_OUTPUT", toEnvVarName(name))] = consoleOutput
+			}
+
 			if sshCmd, ok := vmState.State["sshCommand"].(string); ok && sshCmd != "" {
 				artifact.Env[fmt.Sprintf("TESTENV_VM_%s_SSH", toEnvVarName(name))] = sshCmd
 			}
 
-			// Extract MAC address
 			if mac, ok := vmState.State["mac"].(string); ok && mac != "" {
 				artifact.Metadata[fmt.Sprintf("testenv-vm.vm.%s.mac", name)] = mac
 			}
 		}
 
-		// Add resource reference to managed resources
 		artifact.ManagedResources = append(artifact.ManagedResources,
 			fmt.Sprintf("testenv-vm://vm/%s", name))
 	}
@@ -490,8 +406,6 @@ func (o *Orchestrator) buildArtifact(testID string, envState *v1.EnvironmentStat
 	return artifact
 }
 
-// toEnvVarName converts a resource name to an environment variable name.
-// It replaces hyphens and dots with underscores and converts to uppercase.
 func toEnvVarName(s string) string {
 	s = strings.ToUpper(s)
 	s = strings.ReplaceAll(s, "-", "_")
@@ -499,7 +413,6 @@ func toEnvVarName(s string) string {
 	return s
 }
 
-// isNotFoundError checks if an error indicates a "not found" condition.
 func isNotFoundError(err error) bool {
 	if err == nil {
 		return false

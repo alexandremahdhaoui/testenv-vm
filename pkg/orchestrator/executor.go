@@ -25,6 +25,7 @@ import (
 
 	v1 "github.com/alexandremahdhaoui/testenv-vm/api/v1"
 	providerv1 "github.com/alexandremahdhaoui/testenv-vm/api/provider/v1"
+	"github.com/alexandremahdhaoui/testenv-vm/pkg/client"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/image"
 	"github.com/alexandremahdhaoui/testenv-vm/pkg/provider"
 	specpkg "github.com/alexandremahdhaoui/testenv-vm/pkg/spec"
@@ -318,9 +319,10 @@ func (e *Executor) createResource(
 			}
 		}
 		request = &providerv1.VMCreateRequest{
-			Name:         prefixedName(isoConfig, ref.Name),
-			Spec:         convertedVMSpec,
-			ProviderSpec: renderedSpec.ProviderSpec,
+			Name:          prefixedName(isoConfig, ref.Name),
+			Spec:          convertedVMSpec,
+			ConsoleOutput: client.ConsoleOutputPath(envState.ArtifactDir, ref.Name),
+			ProviderSpec:  renderedSpec.ProviderSpec,
 		}
 		if providerName == "" {
 			providerName = renderedSpec.Provider

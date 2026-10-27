@@ -39,17 +39,18 @@ type NetworkInterface struct {
 }
 
 type DomainConfig struct {
-	Name         string
-	MemoryMB     int
-	VCPU         int
-	DiskPath     string
-	DiskBus      string
-	DiskWWN      string
-	CloudInitISO string
-	CdromPath    string
-	Networks     []NetworkInterface
-	BootOrder    []string
-	Firmware     string
+	Name          string
+	MemoryMB      int
+	VCPU          int
+	DiskPath      string
+	DiskBus       string
+	DiskWWN       string
+	CloudInitISO  string
+	CdromPath     string
+	Networks      []NetworkInterface
+	BootOrder     []string
+	Firmware      string
+	ConsoleOutput string
 }
 
 type domainDevices struct {
@@ -257,6 +258,7 @@ const domainTemplate = `<domain type='kvm'>
         </interface>
 {{- end}}
         <serial type='pty'>
+            <log file='{{.ConsoleOutput}}' append='off'/>
             <target port='0'/>
         </serial>
         <console type='pty'>

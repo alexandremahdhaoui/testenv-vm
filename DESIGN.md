@@ -450,7 +450,7 @@ Available Template Variables:
 {tmpDir}/{testID}/
     +-- vm-ssh.pub           <-- SSH public key
     +-- vm-ssh               <-- SSH private key
-    +-- test-vm.console      <-- VM console output
+    +-- console/test-vm.log  <-- serial console of VM test-vm, exported as TESTENV_VM_TEST_VM_CONSOLE_OUTPUT
 
 State JSON Structure:
 {

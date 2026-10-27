@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ import (
 )
 
 var _ ClientProvider = (*RuntimeProvisioner)(nil)
+
+func ConsoleOutputPath(artifactDir, vmName string) string {
+	return filepath.Join(artifactDir, "console", vmName+".log")
+}
 
 type RuntimeProvisioner struct {
 	manager     *provider.Manager
@@ -280,9 +285,10 @@ func (rp *RuntimeProvisioner) CreateVM(ctx context.Context, name string, vmSpec 
 	}
 
 	request := &providerv1.VMCreateRequest{
-		Name:         name,
-		Spec:         convertVMSpec(renderedSpec),
-		ProviderSpec: nil,
+		Name:          name,
+		Spec:          convertVMSpec(renderedSpec),
+		ConsoleOutput: ConsoleOutputPath(rp.envState.ArtifactDir, name),
+		ProviderSpec:  nil,
 	}
 
 	result, err := rp.manager.Call(rp.defaultProv, "vm_create", request)

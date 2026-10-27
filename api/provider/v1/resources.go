@@ -15,9 +15,10 @@
 package providerv1
 
 type VMCreateRequest struct {
-	Name         string         `json:"name"`
-	Spec         VMSpec         `json:"spec"`
-	ProviderSpec map[string]any `json:"providerSpec,omitempty"`
+	Name          string         `json:"name"`
+	Spec          VMSpec         `json:"spec"`
+	ConsoleOutput string         `json:"consoleOutput"`
+	ProviderSpec  map[string]any `json:"providerSpec,omitempty"`
 }
 
 type VMSpec struct {

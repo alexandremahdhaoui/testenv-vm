@@ -57,6 +57,13 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 		return providerv1.ErrorResult(diskErr)
 	}
 
+	if consoleErr := validateConsoleOutput(req.Name, req.ConsoleOutput); consoleErr != nil {
+		return providerv1.ErrorResult(consoleErr)
+	}
+	if err := createConsoleOutputDir(req.ConsoleOutput); err != nil {
+		return providerv1.ErrorResult(providerv1.NewProviderError(err.Error(), false))
+	}
+
 	ipTimeout, timeoutErr := ipResolutionBudget(req.Spec.Readiness)
 	if timeoutErr != nil {
 		return providerv1.ErrorResult(timeoutErr)
@@ -99,17 +106,18 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	}
 
 	domainXML, err := generateDomainXML(DomainConfig{
-		Name:         req.Name,
-		MemoryMB:     memoryMB,
-		VCPU:         vcpu,
-		DiskPath:     diskPath,
-		DiskBus:      req.Spec.Disk.Bus,
-		DiskWWN:      req.Spec.Disk.WWN,
-		CloudInitISO: isoPath,
-		CdromPath:    req.Spec.Cdrom,
-		Networks:     networkInterfaces(networkNames, req.Spec.Boot.Order),
-		BootOrder:    req.Spec.Boot.Order,
-		Firmware:     req.Spec.Boot.Firmware,
+		Name:          req.Name,
+		MemoryMB:      memoryMB,
+		VCPU:          vcpu,
+		DiskPath:      diskPath,
+		DiskBus:       req.Spec.Disk.Bus,
+		DiskWWN:       req.Spec.Disk.WWN,
+		CloudInitISO:  isoPath,
+		CdromPath:     req.Spec.Cdrom,
+		Networks:      networkInterfaces(networkNames, req.Spec.Boot.Order),
+		BootOrder:     req.Spec.Boot.Order,
+		Firmware:      req.Spec.Boot.Firmware,
+		ConsoleOutput: req.ConsoleOutput,
 	})
 	if err != nil {
 		return providerv1.ErrorResult(providerv1.NewProviderError("failed to generate domain XML: "+err.Error(), false))
@@ -203,15 +211,16 @@ func (p *Provider) VMCreate(req *providerv1.VMCreateRequest) *providerv1.Operati
 	}
 
 	state := &providerv1.VMState{
-		Name:       req.Name,
-		Status:     "running",
-		IP:         ip,
-		MAC:        mac,
-		IPs:        ipsByNet,
-		MACs:       macsByNet,
-		UUID:       formatUUID(dom.UUID),
-		SSHCommand: sshCommand,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		Name:          req.Name,
+		Status:        "running",
+		IP:            ip,
+		MAC:           mac,
+		IPs:           ipsByNet,
+		MACs:          macsByNet,
+		UUID:          formatUUID(dom.UUID),
+		ConsoleOutput: req.ConsoleOutput,
+		SSHCommand:    sshCommand,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		ProviderState: map[string]any{
 			"diskPath":     diskPath,
 			"cloudInitISO": isoPath,
@@ -239,6 +248,28 @@ func validateDisk(disk providerv1.DiskSpec) *providerv1.OperationError {
 	if bus := diskBusOrVirtio(disk.Bus); !wwnBuses[bus] {
 		return providerv1.NewInvalidSpecError(fmt.Sprintf("disk wwn %s on bus %s: libvirt carries a wwn only on ide or scsi", disk.WWN, bus))
 	}
+	return nil
+}
+
+func validateConsoleOutput(vmName, path string) *providerv1.OperationError {
+	if path == "" {
+		return providerv1.NewInvalidSpecError(fmt.Sprintf("vm %s has no console output path: the caller names the file its serial console logs to", vmName))
+	}
+	if !filepath.IsAbs(path) {
+		return providerv1.NewInvalidSpecError(fmt.Sprintf("vm %s console output path %q is not absolute", vmName, path))
+	}
+	return nil
+}
+
+func createConsoleOutputDir(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating console output directory %s: %w", dir, err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return fmt.Errorf("opening console output directory %s to libvirt: %w", dir, err)
+	}
+	setLibvirtACLs(dir)
 	return nil
 }
 

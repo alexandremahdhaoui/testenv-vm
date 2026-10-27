@@ -113,6 +113,9 @@ func TestTheTalosISOAndTheOpenWrtImageBootAnswerTheirPortsAndLeaveNothingBehind(
 	assertPortAnswers(t, "OpenWrt SSH", net.JoinHostPort(openwrtLANIP, openwrtSSHPort))
 	assertPortAnswers(t, "OpenWrt HTTP", net.JoinHostPort(openwrtLANIP, openwrtHTTPPort))
 
+	talosConsole := assertConsoleOutputExported(t, artifact, filepath.Join(artifactDir, testID), talosVMName)
+	openwrtConsole := assertConsoleOutputExported(t, artifact, filepath.Join(artifactDir, testID), openwrtVMName)
+
 	assertImageCached(t, imageCacheDir, "talos-metal-amd64", "metal-amd64.iso")
 	assertImageCached(t, imageCacheDir, "openwrt-x86-64", "openwrt-24.10.8-x86-64-generic-ext4-combined.img.gz")
 	assertImageCached(t, imageCacheDir, "openwrt-x86-64", "openwrt-24.10.8-x86-64-generic-ext4-combined.img")
@@ -132,6 +135,43 @@ func TestTheTalosISOAndTheOpenWrtImageBootAnswerTheirPortsAndLeaveNothingBehind(
 	assertNoLibvirtObjectNamed(t, "net-list", "e2e-boot")
 	assertDirectoryHoldsNoFiles(t, filepath.Join(stateDir, "disks"))
 	assertDirectoryHoldsNoFiles(t, filepath.Join(stateDir, "cloudinit"))
+	assertFileIsGone(t, talosConsole)
+	assertFileIsGone(t, openwrtConsole)
+}
+
+func assertConsoleOutputExported(t *testing.T, artifact *v1.TestEnvArtifact, testenvDir, vmName string) string {
+	t.Helper()
+	want := filepath.Join(testenvDir, "console", vmName+".log")
+	envKey := "TESTENV_VM_" + strings.ToUpper(strings.ReplaceAll(vmName, "-", "_")) + "_CONSOLE_OUTPUT"
+	if got := artifact.Env[envKey]; got != want {
+		t.Errorf("env %s = %q, want %q", envKey, got, want)
+	}
+	metadataKey := "testenv-vm.vm." + vmName + ".consoleOutput"
+	if got := artifact.Metadata[metadataKey]; got != want {
+		t.Errorf("metadata %s = %q, want %q", metadataKey, got, want)
+	}
+	data, err := os.ReadFile(want)
+	if err != nil {
+		t.Errorf("reading the console output of %s: %v", vmName, err)
+		return want
+	}
+	if len(data) == 0 {
+		t.Errorf("the console output of %s at %s is empty after boot", vmName, want)
+		return want
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	t.Logf("the console output of %s holds %d bytes in %d lines, the first lines read", vmName, len(data), len(lines))
+	for _, line := range lines[:min(5, len(lines))] {
+		t.Logf("  %s", line)
+	}
+	return want
+}
+
+func assertFileIsGone(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s still exists after delete, stat error = %v", path, err)
+	}
 }
 
 func requireLibvirt(t *testing.T) {
